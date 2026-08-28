@@ -1,6 +1,6 @@
-## 1.0.0
+## 1.0.0-beta.1
 
-Initial release. Full API parity with both native SDKs (`android-sdk` 4.5.9, `ios-sdk` 4.5.5):
+Initial pre-release. Full API parity with both native SDKs (`android-sdk` 4.5.9, `ios-sdk` 4.5.5):
 
 - Scanning, connecting, connection-state and device-info queries.
 - Vector drawing primitives (point/line/rect/circle/text/polyline), display state (color, shift,
