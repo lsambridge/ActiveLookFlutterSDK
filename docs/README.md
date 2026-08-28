@@ -24,15 +24,19 @@ history; these pages are the reference.
   ("scan finds nothing," "draw commands do nothing," build failures), as opposed to confirmed SDK
   bugs (see Known issues below).
 
-> **Generated API reference (dartdoc): currently blocked by an upstream tooling bug.** Running
-> `dart doc` against this package crashes inside dartdoc 9.0.6 itself
-> (`DocumentationComment._stripDocImports`, a `RangeError` unrelated to anything in this package's
-> own doc comments) when combined with this Flutter SDK version's bundled `sky_engine` docs —
-> confirmed by reproducing the crash with a minimal package containing only this repo's four `lib/`
-> files plus the `flutter`/`plugin_platform_interface` dependencies. Nothing in this repo can fix
-> that; it needs a dartdoc or Flutter SDK update upstream. Until then, the hand-written pages below
-> are the API reference — every method/type on them has been cross-checked against the real
-> `ActivelookSdk` class and `lib/src/activelook_types.dart` source directly.
+> **Generated API reference (dartdoc)**: don't run plain `dart doc .` — the dartdoc 9.0.6 bundled
+> with this Flutter SDK crashes (`DocumentationComment._stripDocImports`, a `RangeError`) when
+> combined with this Flutter SDK's `sky_engine` docs. This is an upstream dartdoc bug, already
+> fixed as of dartdoc 9.0.9 — confirmed by reproducing the crash with a minimal package and
+> re-running it against a newer standalone dartdoc. Use a standalone, newer dartdoc instead:
+> ```
+> dart pub global activate dartdoc
+> dart pub global run dartdoc .
+> ```
+> This generates a full class-by-class HTML reference into `doc/api/` (gitignored — regenerate
+> locally or wire into a docs-hosting pipeline rather than committing it). The hand-written pages
+> below remain the primary reference regardless — they cover *why*/*when* to use something, which
+> generated API docs don't.
 
 ## API reference by subsystem
 
