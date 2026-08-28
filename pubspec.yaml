@@ -1,6 +1,6 @@
 name: activelook_sdk
 description: "Flutter plugin wrapper for ActiveLook smart glasses (Android/iOS native SDK bridge)."
-version: 0.0.1
+version: 1.0.0
 homepage:
 
 environment:

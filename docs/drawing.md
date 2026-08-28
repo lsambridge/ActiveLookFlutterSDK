@@ -11,6 +11,13 @@ The ActiveLook display is 304×256 px. All `x`/`y` coordinates in this API are p
 values; the native SDKs' own signed/unsigned integer width constraints (`Int16`/`UInt8`/etc.) are
 handled internally by the platform bridge — you don't need to think about byte widths from Dart.
 
+**Every command on this page and on [layouts/gauges/pages](layouts-gauges-pages-animations.md)
+positions from the top-left corner** — the one deliberate exception in this whole API is
+[widgets](widgets.md), whose `x`/`y` position the widget's **bottom-right** corner instead
+(confirmed directly in ActiveLook's own iOS SDK doc comments). Since widgets are iOS-only, this
+only comes up if you're calling `widgetXxx()` methods — don't assume the same top-left convention
+carries over from everything else on this page.
+
 ## General device commands
 
 ```dart

@@ -14,10 +14,25 @@ history; these pages are the reference.
 ## Start here
 
 - **[Getting started](getting-started.md)** — install, connect, draw your first thing on-screen.
+- **[Full session example](full-session-example.md)** — a complete, copy-pasteable walkthrough
+  (scan → connect → build a screen → live updates → teardown) tying multiple subsystems together.
 - **[Connection & device events](connection-and-events.md)** — scanning, connecting, the three
   event streams (battery, flow control, sensor tap), and the confirmed Android/iOS flow-control
   divergence.
 - **[Error handling](error-handling.md)** — the exception types this package throws and when.
+- **[Troubleshooting](troubleshooting.md)** — practical first-response steps for common problems
+  ("scan finds nothing," "draw commands do nothing," build failures), as opposed to confirmed SDK
+  bugs (see Known issues below).
+
+> **Generated API reference (dartdoc): currently blocked by an upstream tooling bug.** Running
+> `dart doc` against this package crashes inside dartdoc 9.0.6 itself
+> (`DocumentationComment._stripDocImports`, a `RangeError` unrelated to anything in this package's
+> own doc comments) when combined with this Flutter SDK version's bundled `sky_engine` docs —
+> confirmed by reproducing the crash with a minimal package containing only this repo's four `lib/`
+> files plus the `flutter`/`plugin_platform_interface` dependencies. Nothing in this repo can fix
+> that; it needs a dartdoc or Flutter SDK update upstream. Until then, the hand-written pages below
+> are the API reference — every method/type on them has been cross-checked against the real
+> `ActivelookSdk` class and `lib/src/activelook_types.dart` source directly.
 
 ## API reference by subsystem
 
@@ -38,6 +53,7 @@ history; these pages are the reference.
 - **[Known issues & platform divergences](known-issues.md)** — bugs confirmed in ActiveLook's own
   native SDKs, and places where Android and iOS genuinely behave differently. Read this before
   writing code that assumes identical behavior on both platforms.
+- **[Changelog](../CHANGELOG.md)** — what shipped in each release.
 
 ## Package layout, for contributors
 
