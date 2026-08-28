@@ -1,4 +1,4 @@
-# ActiveLookSDK
+# Active Look SDK
 
 A Flutter plugin wrapping ActiveLook's official native SDKs
 ([`ActiveLook/android-sdk`](https://github.com/ActiveLook/android-sdk),
