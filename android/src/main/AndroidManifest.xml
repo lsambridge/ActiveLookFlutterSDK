@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  package="com.enduranceZone.activelook_sdk">
+
+  <!-- Per docs/plan-race-mode-activelook-glasses.md §7.4: same permission set
+       Engyne's own BleSensorSource already requests for HR/power strap pairing. -->
+  <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+</manifest>
