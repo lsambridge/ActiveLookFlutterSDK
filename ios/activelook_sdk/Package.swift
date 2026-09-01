@@ -22,7 +22,7 @@ let package = Package(
             name: "activelook_sdk",
             dependencies: [
                 .product(name: "FlutterFramework", package: "FlutterFramework"),
-                .product(name: "ActiveLookSDK", package: "ActiveLookSDK"),
+                .product(name: "ActiveLookSDK", package: "ios-sdk"),
             ],
             resources: [
                 // If your plugin requires a privacy manifest, for example if it uses any required
