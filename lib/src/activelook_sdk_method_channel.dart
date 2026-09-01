@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -34,10 +36,23 @@ class MethodChannelActivelookSdk extends ActivelookSdkPlatform {
 
   @override
   Stream<ActiveLookDiscoveredGlasses> startScan() {
-    methodChannel.invokeMethod<void>('startScan');
-    return _scanStream ??= _scanChannel.receiveBroadcastStream().map(
+    final controller = StreamController<ActiveLookDiscoveredGlasses>.broadcast();
+    final events = _scanStream ??= _scanChannel.receiveBroadcastStream().map(
           (event) => ActiveLookDiscoveredGlasses.fromMap(event as Map<Object?, Object?>),
         );
+    final eventsSub = events.listen(controller.add, onError: controller.addError);
+
+    // The native 'startScan' call can throw synchronously into its Future
+    // (e.g. a null Bluetooth adapter) - if left unawaited, that rejection
+    // has no listener and becomes an unhandled async error that crashes the
+    // app regardless of any try/catch around this call. Forward it into the
+    // stream instead, the same path callers already listen to via onError.
+    methodChannel.invokeMethod<void>('startScan').catchError((Object e) {
+      controller.addError(e);
+    });
+
+    controller.onCancel = eventsSub.cancel;
+    return controller.stream;
   }
 
   @override
