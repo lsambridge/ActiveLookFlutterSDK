@@ -6,6 +6,7 @@ import android.os.Looper
 import com.activelook.activelooksdk.DiscoveredGlasses
 import com.activelook.activelooksdk.Glasses
 import com.activelook.activelooksdk.Sdk
+import com.activelook.activelooksdk.SerializedGlasses
 import com.activelook.activelooksdk.types.Configuration
 import com.activelook.activelooksdk.types.DemoPattern
 import com.activelook.activelooksdk.types.FlowControlStatus
@@ -32,6 +33,14 @@ import io.flutter.plugin.common.MethodChannel.Result
  * here is explicitly posted back to the main thread before touching Flutter channels, since
  * `MethodChannel`/`EventChannel` calls must originate on the platform thread.
  */
+private class SavedGlasses(
+    private val address: String,
+) : SerializedGlasses {
+    override fun getAddress() = address
+    override fun getName(): String? = null
+    override fun getManufacturer(): String? = null
+}
+
 class ActivelookSdkPlugin :
     FlutterPlugin,
     MethodCallHandler {
@@ -141,35 +150,56 @@ class ActivelookSdkPlugin :
             }
             "connect" -> {
                 val id = call.argument<String>("id")
-                val dg = discovered[id]
-                if (dg == null) {
-                    result.error("NOT_FOUND", "No discovered glasses with id $id — scan first.", null)
+                if (id == null) {
+                    result.error("NOT_FOUND", "No device id given to connect.", null)
                     return
                 }
-                onMain { connectionStateSink?.success("connecting") }
-                dg.connect(
-                    { glasses ->
-                        onMain {
-                            connectedGlasses = glasses
-                            glasses.setOnDisconnected {
-                                onMain {
-                                    connectedGlasses = null
-                                    connectionStateSink?.success("disconnected")
-                                }
+                val onConnected = { glasses: Glasses ->
+                    onMain {
+                        connectedGlasses = glasses
+                        glasses.setOnDisconnected {
+                            onMain {
+                                connectedGlasses = null
+                                connectionStateSink?.success("disconnected")
                             }
-                            connectionStateSink?.success("connected")
                         }
-                    },
-                    { _ ->
-                        onMain { connectionStateSink?.success("disconnected") }
-                    },
-                    { _ ->
-                        onMain {
-                            connectedGlasses = null
-                            connectionStateSink?.success("disconnected")
-                        }
-                    },
-                )
+                        connectionStateSink?.success("connected")
+                    }
+                }
+                val onConnectionFailed = { _: Glasses? ->
+                    onMain {
+                        connectedGlasses = null
+                        connectionStateSink?.success("disconnected")
+                    }
+                }
+                onMain { connectionStateSink?.success("connecting") }
+                val dg = discovered[id]
+                if (dg != null) {
+                    // Address just came from an active/recent scan (this session's
+                    // process) - connect through the DiscoveredGlasses instance the
+                    // scan callback handed us, as before.
+                    dg.connect(
+                        onConnected,
+                        { _ -> onMain { connectionStateSink?.success("disconnected") } },
+                        onConnectionFailed,
+                    )
+                } else {
+                    // No scan this process (e.g. app cold-started and the Flutter
+                    // side reconnects straight from a saved device id, deliberately
+                    // without scanning first - see RaceModeGlassesHud.start) - the
+                    // `discovered` map above is scan-populated only and empty here.
+                    // Sdk.connect(SerializedGlasses, ...) is the SDK's own scan-free
+                    // path for exactly this: it wraps the raw address in an internal
+                    // DiscoveredGlasses-equivalent backed by
+                    // BluetoothAdapter.getRemoteDevice(address), so no prior
+                    // discovery/scan result is required.
+                    ensureSdk().connect(
+                        SavedGlasses(id),
+                        onConnected,
+                        { _ -> onMain { connectionStateSink?.success("disconnected") } },
+                        onConnectionFailed,
+                    )
+                }
                 result.success(null)
             }
             "disconnect" -> {
@@ -206,6 +236,21 @@ class ActivelookSdkPlugin :
             "shift" -> withGlasses(result) { g ->
                 g.shift(call.requireInt("x").toShort(), call.requireInt("y").toShort())
                 result.success(null)
+            }
+            "settings" -> withGlasses(result) { g ->
+                g.settings { s ->
+                    onMain {
+                        result.success(
+                            mapOf(
+                                "xShift" to s.globalXShift.toInt(),
+                                "yShift" to s.globalYShift.toInt(),
+                                "luma" to s.luma.toInt(),
+                                "alsEnabled" to s.isAlsEnable,
+                                "gestureEnabled" to s.isGestureEnable,
+                            ),
+                        )
+                    }
+                }
             }
             "holdFlush" -> withGlasses(result) { g ->
                 val action = if (call.requireString("action") == "hold") holdFlushAction.HOLD else holdFlushAction.FLUSH
@@ -278,6 +323,14 @@ class ActivelookSdkPlugin :
                     rotationFromDartName(call.requireString("textRotation")),
                     call.argument<Boolean>("textOpacity") ?: true,
                 )
+                val imageId = call.argument<Int>("imageId")
+                if (imageId != null) {
+                    layout.addSubCommandBitmap(
+                        imageId.toByte(),
+                        call.requireInt("imageX").toShort(),
+                        call.requireInt("imageY").toShort(),
+                    )
+                }
                 g.layoutSave(layout)
                 result.success(null)
             }

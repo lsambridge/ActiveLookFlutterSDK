@@ -24,6 +24,20 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
         if Thread.isMainThread { body() } else { DispatchQueue.main.async(execute: body) }
     }
 
+    /// Builds the `SerializedGlasses` (`= Data`) blob `ActiveLookSDK.connect(using:)` needs for a
+    /// scan-free reconnect from a saved id alone - confirmed against the SDK's own
+    /// `UnserializedGlasses`/`SerializedGlasses.swift` (v4.5.5): a JSON object of exactly
+    /// `{"id": String, "name": String, "manId": String}`, where only `id` (parsed back into a
+    /// `UUID` and passed to `CBCentralManager.retrievePeripherals(withIdentifiers:)`) matters for
+    /// reconnection - `name`/`manId` are never read on this path, so placeholders are fine. The
+    /// SDK's documented preferred approach is instead persisting the real blob from
+    /// `Glasses.getSerializedGlasses()` right after a scan-based connect, but this plugin only
+    /// ever stores the raw id string (matching `ActiveLookPairingStorage` on the Flutter side), so
+    /// this reconstructs the equivalent shape from that instead of changing what's persisted.
+    private static func serializedGlasses(forId id: String) -> SerializedGlasses? {
+        try? JSONSerialization.data(withJSONObject: ["id": id, "name": "", "manId": ""])
+    }
+
     private func sdk() throws -> ActiveLookSDK {
         try ActiveLookSDK.shared(
             onUpdateStartCallback: { _ in },
@@ -85,36 +99,71 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
             result(nil)
 
         case "connect":
-            guard let id = requireString("id"), let dg = discovered[id] else {
-                result(FlutterError(code: "NOT_FOUND", message: "No discovered glasses with id — scan first.", details: nil))
+            guard let id = requireString("id") else {
+                result(FlutterError(code: "NOT_FOUND", message: "No device id given to connect.", details: nil))
                 return
             }
-            onMain { self.connectionStateSink?("connecting") }
-            dg.connect(
-                onGlassesConnected: { [weak self] glasses in
-                    guard let self = self else { return }
-                    self.onMain {
-                        self.connectedGlasses = glasses
-                        glasses.onDisconnect {
-                            self.onMain {
-                                self.connectedGlasses = nil
-                                self.connectionStateSink?("disconnected")
-                            }
+            let onConnected: (Glasses) -> Void = { [weak self] glasses in
+                guard let self = self else { return }
+                self.onMain {
+                    self.connectedGlasses = glasses
+                    glasses.onDisconnect {
+                        self.onMain {
+                            self.connectedGlasses = nil
+                            self.connectionStateSink?("disconnected")
                         }
-                        self.connectionStateSink?("connected")
                     }
-                },
-                onGlassesDisconnected: { [weak self] in
-                    self?.onMain {
-                        self?.connectedGlasses = nil
-                        self?.connectionStateSink?("disconnected")
-                    }
-                },
-                onConnectionError: { [weak self] _ in
-                    self?.onMain { self?.connectionStateSink?("disconnected") }
+                    self.connectionStateSink?("connected")
                 }
-            )
-            result(nil)
+            }
+            let onDisconnected: () -> Void = { [weak self] in
+                self?.onMain {
+                    self?.connectedGlasses = nil
+                    self?.connectionStateSink?("disconnected")
+                }
+            }
+            onMain { self.connectionStateSink?("connecting") }
+            if let dg = discovered[id] {
+                // Address just came from an active/recent scan (this session's
+                // process) - connect through the DiscoveredGlasses instance the
+                // scan callback handed us, as before.
+                dg.connect(
+                    onGlassesConnected: onConnected,
+                    onGlassesDisconnected: onDisconnected,
+                    onConnectionError: { [weak self] _ in
+                        self?.onMain { self?.connectionStateSink?("disconnected") }
+                    }
+                )
+                result(nil)
+            } else if let serialized = Self.serializedGlasses(forId: id) {
+                // No scan this process (e.g. app cold-started and the Flutter
+                // side reconnects straight from a saved device id, deliberately
+                // without scanning first - see RaceModeGlassesHud.start) - the
+                // `discovered` dictionary above is scan-populated only and empty
+                // here. ActiveLookSDK.connect(using:) is the SDK's own scan-free
+                // path for exactly this: it unserializes the id, tries
+                // CBCentralManager.retrievePeripherals(withIdentifiers:)
+                // internally, so no prior discovery/scan result is required -
+                // only name/manId are placeholders since only the id is used to
+                // retrieve the peripheral.
+                do {
+                    try sdk().connect(
+                        using: serialized,
+                        onGlassesConnected: onConnected,
+                        onGlassesDisconnected: onDisconnected,
+                        onConnectionError: { [weak self] _ in
+                            self?.onMain { self?.connectionStateSink?("disconnected") }
+                        }
+                    )
+                    result(nil)
+                } catch {
+                    onMain { self.connectionStateSink?("disconnected") }
+                    result(FlutterError(code: "SDK_ERROR", message: error.localizedDescription, details: nil))
+                }
+            } else {
+                onMain { self.connectionStateSink?("disconnected") }
+                result(FlutterError(code: "NOT_FOUND", message: "No discovered glasses with id \(id) and could not build a serialized reconnect payload.", details: nil))
+            }
 
         case "disconnect":
             connectedGlasses?.disconnect()
@@ -162,6 +211,20 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
             withGlasses(result: result) { g in
                 g.holdFlush(holdFlush: requireString("action") == "hold" ? .HOLD : .FLUSH)
                 result(nil)
+            }
+        case "settings":
+            withGlasses(result: result) { g in
+                g.settings { s in
+                    self.onMain {
+                        result([
+                            "xShift": s.xShift,
+                            "yShift": s.yShift,
+                            "luma": s.luma,
+                            "alsEnabled": s.brightnessAdjustmentEnabled,
+                            "gestureEnabled": s.gestureDetectionEnabled,
+                        ])
+                    }
+                }
             }
 
         case "color":
@@ -244,9 +307,16 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                     textValid: (args["textValid"] as? Bool) ?? true,
                     textX: UInt16(requireInt("textX") ?? 0),
                     textY: UInt8(requireInt("textY") ?? 0),
-                    textRotation: Self.textRotation(from: requireString("textRotation") ?? "bottomLeftToRight"),
+                    textRotation: Self.textRotation(from: requireString("textRotation") ?? "topLeftToRight"),
                     textOpacity: (args["textOpacity"] as? Bool) ?? true
                 )
+                if let imageId = requireInt("imageId") {
+                    _ = layout.addSubCommandBitmap(
+                        id: UInt8(imageId),
+                        x: Int16(requireInt("imageX") ?? 0),
+                        y: Int16(requireInt("imageY") ?? 0)
+                    )
+                }
                 g.layoutSave(parameters: layout)
                 result(nil)
             }
