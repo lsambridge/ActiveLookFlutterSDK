@@ -1,6 +1,7 @@
 import 'activelook_sdk_platform_interface.dart';
 import 'src/activelook_types.dart';
 
+export 'src/activelook_safe_canvas.dart';
 export 'src/activelook_types.dart';
 
 /// Dart wrapper over ActiveLook's official Android (`android-sdk`) and iOS
@@ -93,6 +94,12 @@ class ActivelookSdk {
   /// -128 and 127.
   Future<void> shift(int x, int y) => _platform.shift(x, y);
 
+  /// Reads the device's current persisted settings (shift, luma, ALS,
+  /// gesture) — see [ActiveLookGlassesSettings]'s doc comment on why this is
+  /// worth calling on every connect before assuming/overwriting a shift
+  /// value.
+  Future<ActiveLookGlassesSettings> settings() => _platform.settings();
+
   /// Holds or flushes the on-device graphic engine — see
   /// [ActiveLookHoldFlushAction]. `clear()` is not affected by hold.
   Future<void> holdFlush(ActiveLookHoldFlushAction action) => _platform.holdFlush(action);
@@ -147,6 +154,15 @@ class ActivelookSdk {
   Future<void> layoutDelete(int id) => _platform.layoutDelete(id);
 
   Future<List<int>> layoutList() => _platform.layoutList();
+
+  /// Reads back saved layout [id]'s real parameters (position, size, font,
+  /// text position/rotation/opacity) — useful to confirm what a pre-built
+  /// configuration's layout ids actually contain on a specific unit, rather
+  /// than trusting third-party documentation of what a config version is
+  /// supposed to contain (confirmed necessary on real hardware, 2026-09-02:
+  /// a unit's on-device `ALooK` layout ids didn't match
+  /// `Activelook-Visual-Assets`' published table at all).
+  Future<ActiveLookLayoutParameters> layoutGet(int id) => _platform.layoutGet(id);
 
   // --- Gauges (ActiveLook_API.md §4.10) ---
 

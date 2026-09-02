@@ -67,7 +67,7 @@ they throw a `PlatformException` with code `NOT_CONNECTED` (see
 **[Error handling](error-handling.md)**).
 
 ```dart
-await sdk.text(10, 40, ActiveLookTextRotation.bottomLeftToRight, 2, 15, 'Hello, ActiveLook');
+await sdk.text(10, 40, ActiveLookTextRotation.topLeftToRight, 2, 15, 'Hello, ActiveLook');
 await sdk.rect(0, 0, 100, 50);
 await sdk.circleFilled(150, 128, 20);
 ```

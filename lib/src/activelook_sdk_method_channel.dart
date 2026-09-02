@@ -149,6 +149,12 @@ class MethodChannelActivelookSdk extends ActivelookSdkPlatform {
   Future<void> shift(int x, int y) => methodChannel.invokeMethod<void>('shift', {'x': x, 'y': y});
 
   @override
+  Future<ActiveLookGlassesSettings> settings() async {
+    final result = await methodChannel.invokeMethod<Map<Object?, Object?>>('settings');
+    return ActiveLookGlassesSettings.fromMap(result ?? const {});
+  }
+
+  @override
   Future<void> holdFlush(ActiveLookHoldFlushAction action) =>
       methodChannel.invokeMethod<void>('holdFlush', {'action': action.name});
 
@@ -231,6 +237,12 @@ class MethodChannelActivelookSdk extends ActivelookSdkPlatform {
   Future<List<int>> layoutList() async {
     final result = await methodChannel.invokeMethod<List<Object?>>('layoutList');
     return (result ?? const []).cast<int>();
+  }
+
+  @override
+  Future<ActiveLookLayoutParameters> layoutGet(int id) async {
+    final result = await methodChannel.invokeMethod<Map<Object?, Object?>>('layoutGet', {'id': id});
+    return ActiveLookLayoutParameters.fromMap(id, result ?? const {});
   }
 
   @override

@@ -54,6 +54,54 @@ enum ActiveLookTextRotation {
 
 enum ActiveLookLedState { off, on, toggle, blink }
 
+/// The device's persisted per-unit settings (`ActiveLook_API.md` §4.3's
+/// `settings` command, `0x0A`) — read them via `ActivelookSdk.settings()`.
+///
+/// [xShift]/[yShift] are the same values `shift(x, y)` sets, persisted on
+/// the device across power cycles and firmware/factory calibration for that
+/// physical unit's mechanical/optical mounting (`ActiveLook_API.md` §5.8) —
+/// **not necessarily (0, 0)** on a real pair of glasses. Read this before
+/// ever calling `shift()` yourself, rather than assuming/overwriting a
+/// value you haven't seen: real-hardware testing (Engyne repo, 2026-09-02)
+/// found a `shift(0, 0)` call visibly pushed content off-screen on a unit
+/// whose actual calibration was non-zero.
+class ActiveLookGlassesSettings {
+  const ActiveLookGlassesSettings({
+    required this.xShift,
+    required this.yShift,
+    required this.luma,
+    required this.alsEnabled,
+    required this.gestureEnabled,
+  });
+
+  final int xShift;
+  final int yShift;
+
+  /// Display luminance, 0-15.
+  final int luma;
+
+  /// Whether ambient-light-sensor auto-brightness is currently enabled.
+  final bool alsEnabled;
+
+  /// Whether gesture detection is currently enabled.
+  final bool gestureEnabled;
+
+  factory ActiveLookGlassesSettings.fromMap(Map<Object?, Object?> map) {
+    return ActiveLookGlassesSettings(
+      xShift: map['xShift'] as int? ?? 0,
+      yShift: map['yShift'] as int? ?? 0,
+      luma: map['luma'] as int? ?? 0,
+      alsEnabled: map['alsEnabled'] as bool? ?? false,
+      gestureEnabled: map['gestureEnabled'] as bool? ?? false,
+    );
+  }
+
+  @override
+  String toString() =>
+      'ActiveLookGlassesSettings(xShift: $xShift, yShift: $yShift, luma: $luma, '
+      'alsEnabled: $alsEnabled, gestureEnabled: $gestureEnabled)';
+}
+
 /// Whether the on-device graphic engine should batch subsequent draw
 /// commands (`hold`) or render them immediately (`flush`) — see
 /// `ActiveLook_API.md` §4.9 / this repo's plan doc §10a "two draw models."
@@ -93,16 +141,13 @@ class ActiveLookDeviceInformation {
 /// directly): id, position/size, foreground/background/font, a text
 /// sub-position + rotation + text-opacity flag.
 ///
-/// **Deliberately out of v1 scope**: the native `LayoutParameters` also
-/// supports an `addSubCommandXxx(...)` builder for embedding extra draw
-/// primitives (bitmap/circle/line/rect/text/gauge/anim/polyline) directly
-/// inside a saved layout. That's real functionality, not a bridge
-/// limitation — it's excluded here for the same reason
-/// `docs/plan-race-mode-activelook-glasses.md` §7.2/§13.2 scoped v1 down to
-/// a deliberately small first slice: Race Mode's own layouts haven't been
-/// designed yet, so wrapping a builder API before knowing which sub-commands
-/// are actually needed would be speculative. Add it once a real layout
-/// design calls for it.
+/// The native `LayoutParameters` also supports an `addSubCommandXxx(...)`
+/// builder for embedding extra draw primitives (bitmap/circle/line/rect/
+/// text/gauge/anim/polyline) directly inside a saved layout - only the
+/// bitmap sub-command ([imageId]/[imageX]/[imageY]) is wrapped here so far,
+/// needed for Engyne's own glasses config (icon + text per stat row, see
+/// `RaceModeGlassesHud`). The rest are still deliberately unwrapped until a
+/// real layout design needs them.
 class ActiveLookLayoutParameters {
   const ActiveLookLayoutParameters({
     required this.id,
@@ -116,8 +161,11 @@ class ActiveLookLayoutParameters {
     this.textValid = true,
     this.textX = 0,
     this.textY = 0,
-    this.textRotation = ActiveLookTextRotation.bottomLeftToRight,
+    this.textRotation = ActiveLookTextRotation.topLeftToRight,
     this.textOpacity = true,
+    this.imageId,
+    this.imageX = 0,
+    this.imageY = 0,
   });
 
   final int id;
@@ -134,6 +182,22 @@ class ActiveLookLayoutParameters {
   final ActiveLookTextRotation textRotation;
   final bool textOpacity;
 
+  /// Embeds a saved image (`imgSave`'d separately) as a fixed sub-element of
+  /// this layout, at ([imageX], [imageY]) relative to this layout's own
+  /// (x, y) clipping region — matches the native SDKs'
+  /// `LayoutParameters.addSubCommandBitmap(id, x, y)` builder
+  /// (`ActiveLook_API.md` §5.10's "additional graphical commands" table,
+  /// command id 0 "image"). Null (the default) saves a layout with no
+  /// embedded image, same as before this field existed. Only the single
+  /// bitmap sub-command is supported — the native builder also supports
+  /// circ/circf/color/font/line/point/rect/rectf/text/gauge/anim/polyline
+  /// sub-commands, deliberately left out until a real layout design needs
+  /// them (see this class's original doc comment on why sub-commands were
+  /// scoped out entirely at first).
+  final int? imageId;
+  final int imageX;
+  final int imageY;
+
   Map<String, Object?> toMap() => {
         'id': id,
         'x': x,
@@ -148,7 +212,39 @@ class ActiveLookLayoutParameters {
         'textY': textY,
         'textRotation': textRotation.name,
         'textOpacity': textOpacity,
+        if (imageId != null) 'imageId': imageId,
+        'imageX': imageX,
+        'imageY': imageY,
       };
+
+  /// Deserializes `layoutGet`'s response — note the response has no `id`
+  /// field (`ActiveLook_API.md` §4.9: "Layouts parameters without `id`"),
+  /// so [id] must be supplied by the caller (the id it asked `layoutGet`
+  /// for), not read from [map].
+  factory ActiveLookLayoutParameters.fromMap(int id, Map<Object?, Object?> map) {
+    return ActiveLookLayoutParameters(
+      id: id,
+      x: map['x'] as int? ?? 0,
+      y: map['y'] as int? ?? 0,
+      width: map['width'] as int? ?? 0,
+      height: map['height'] as int? ?? 0,
+      foregroundColor: map['foregroundColor'] as int? ?? 15,
+      backgroundColor: map['backgroundColor'] as int? ?? 0,
+      font: map['font'] as int? ?? 0,
+      textValid: map['textValid'] as bool? ?? false,
+      textX: map['textX'] as int? ?? 0,
+      textY: map['textY'] as int? ?? 0,
+      textRotation: _rotationFromName(map['textRotation'] as String?),
+      textOpacity: map['textOpacity'] as bool? ?? true,
+    );
+  }
+
+  static ActiveLookTextRotation _rotationFromName(String? name) {
+    for (final r in ActiveLookTextRotation.values) {
+      if (r.name == name) return r;
+    }
+    return ActiveLookTextRotation.topLeftToRight;
+  }
 }
 
 /// Parameters for a saved gauge — mirrors `gaugeSave` in both native SDKs

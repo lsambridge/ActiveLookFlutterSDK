@@ -29,7 +29,7 @@ const layout = ActiveLookLayoutParameters(
   font: 0,
   textValid: true,
   textX: 5, textY: 5,
-  textRotation: ActiveLookTextRotation.bottomLeftToRight,
+  textRotation: ActiveLookTextRotation.topLeftToRight,
   textOpacity: true,
 );
 await sdk.layoutSave(layout);

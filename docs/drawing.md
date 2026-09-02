@@ -70,7 +70,13 @@ enum ActiveLookTextRotation {
 }
 ```
 
-`bottomLeftToRight` is the normal, upright reading direction most UI text should use.
+`topLeftToRight` is the normal, upright reading direction most UI text should use — confirmed
+against ActiveLook's own `ActiveLook_API.md` §5.7 text-orientation diagram, whose red anchor-dot
+illustration shows `R4` (`topLeftToRight`, wire value 4) anchored top-left with upright,
+left-to-right glyphs, while `R1` (`bottomLeftToRight`, wire value 1) draws mirrored/reversed
+glyphs from a bottom-left anchor. Despite its name, `bottomLeftToRight` is **not** the normal
+reading direction — an earlier version of this doc got this backwards, which propagated into a
+real bug (all HUD text rendering upside-down/mirrored) before being caught on real hardware.
 
 `fontSize` and `color` in `text()` are raw values matching the on-device font ID and 0-15 grey
 level, not point sizes — see [Images & fonts](images-and-fonts.md#fonts) for managing custom fonts,

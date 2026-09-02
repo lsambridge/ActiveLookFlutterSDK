@@ -109,6 +109,12 @@ abstract class ActivelookSdkPlatform extends PlatformInterface {
     throw UnimplementedError('shift() has not been implemented.');
   }
 
+  /// Reads back the device's current persisted settings (shift, luma, ALS,
+  /// gesture) — see [ActiveLookGlassesSettings]'s doc comment.
+  Future<ActiveLookGlassesSettings> settings() {
+    throw UnimplementedError('settings() has not been implemented.');
+  }
+
   Future<void> holdFlush(ActiveLookHoldFlushAction action) {
     throw UnimplementedError('holdFlush() has not been implemented.');
   }
@@ -186,6 +192,14 @@ abstract class ActivelookSdkPlatform extends PlatformInterface {
 
   Future<List<int>> layoutList() {
     throw UnimplementedError('layoutList() has not been implemented.');
+  }
+
+  /// Reads back a saved layout's real parameters — position, size, font,
+  /// text position/rotation/opacity — see [ActiveLookLayoutParameters
+  /// .fromMap]'s doc comment on why `id` must be passed in separately from
+  /// the response.
+  Future<ActiveLookLayoutParameters> layoutGet(int id) {
+    throw UnimplementedError('layoutGet() has not been implemented.');
   }
 
   // --- Gauge commands (ActiveLook_API.md §4.10) ---
