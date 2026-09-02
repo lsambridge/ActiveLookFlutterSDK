@@ -103,6 +103,28 @@ class ActiveLookSafeCanvas {
     return _sdk.circleFilled(dx, dy, radius);
   }
 
+  /// As `ActivelookSdk.imgDisplay`, but [x]/[y] are safe-area-relative,
+  /// same as every other draw method on this class. **Not yet separately
+  /// confirmed on real hardware** (2026-09-02) - every other primitive here
+  /// (point/line/rect/circle/text) needed [flipped]'s 180deg correction on
+  /// the one unit tested so far, so this applies the same correction on the
+  /// assumption `imgDisplay` shares that unit's coordinate convention
+  /// rather than having its own - check the image lands the same side as
+  /// text/shapes the first time this runs on real hardware, and revisit if
+  /// it doesn't.
+  Future<void> image(int imageId, int x, int y) {
+    final (dx, dy) = _toDevice(x, y);
+    return _sdk.imgDisplay(imageId, dx, dy);
+  }
+
+  /// Sets the color/grey value used to draw the next shape - passthrough to
+  /// `ActivelookSdk.rawColor`, no coordinate translation needed since this
+  /// sets state rather than drawing. See that method's doc comment: this is
+  /// the real `0x3D color` command (an [ActiveLookColorPalette] byte on
+  /// color-panel glasses), not `ActivelookSdk.color` (grey-level only
+  /// despite the name).
+  Future<void> rawColor(int value) => _sdk.rawColor(value);
+
   /// As `ActivelookSdk.text`, but [x]/[y] are safe-area-relative. Note that
   /// [x] still anchors the string's near edge in *reading* direction (per
   /// [rotation]), not necessarily its visual left edge once [flipped] is
@@ -144,5 +166,21 @@ class ActiveLookSafeCanvas {
     );
     final x = (safeWidth - textWidthPx) ~/ 2;
     return this.text(x, y, rotation, fontSize, color, text);
+  }
+
+  /// As [text], but [colorValue] is an [ActiveLookColorPalette] byte
+  /// (the real `0x3E txtColor` command) instead of [text]'s grey-level-only
+  /// parameter - see `ActivelookSdk.rawTextColor`'s doc comment. Color-panel
+  /// glasses only.
+  Future<void> rawTextColor(
+    int x,
+    int y,
+    ActiveLookTextRotation rotation,
+    int fontSize,
+    int colorValue,
+    String text,
+  ) {
+    final (dx, dy) = _toDevice(x, y);
+    return _sdk.rawTextColor(dx, dy, rotation, fontSize, colorValue, text);
   }
 }

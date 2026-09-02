@@ -107,6 +107,21 @@ class ActivelookSdk {
   // --- Vector drawing (ActiveLook_API.md §4.6) ---
 
   /// Sets the grey level (0-15) used to draw subsequent graphical elements.
+  ///
+  /// Despite the method name (matching both native SDKs' own naming), this
+  /// is genuinely the `0x30 grayscale` wire command, **not** `0x3D color`
+  /// (`ActiveLook_API.md` §4.6) — confirmed on real hardware (2026-09-02):
+  /// both `android-sdk`'s and `ios-sdk`'s `color(level)` route through
+  /// grayscale-only encoding (Android's asserts `0-15` and crashed when
+  /// given a real RG palette byte; iOS has no assert but sends the same
+  /// `0x30` opcode). Neither native SDK exposes the real `0x3D color`
+  /// command under any name — use [rawColor]/[rawTextColor] for that on
+  /// color-panel (`MDP08`) glasses, with an [ActiveLookColorPalette] byte.
+  ///
+  /// Calling this before each draw call (`rect`, `circle`, `text`, etc.)
+  /// lets different shapes on the same screen carry different grey levels
+  /// simultaneously — the device remembers the value drawn with, it is not
+  /// a single global mode (`ActiveLook_API.md` §5.1).
   Future<void> color(int level) => _platform.color(level);
 
   Future<void> point(int x, int y) => _platform.point(x, y);
@@ -121,6 +136,12 @@ class ActivelookSdk {
 
   Future<void> circleFilled(int x, int y, int radius) => _platform.circleFilled(x, y, radius);
 
+  /// [color] is a grey level 0-15 (`ActiveLook_API.md` §4.6, `0x37 txt`'s
+  /// `u8 grey` parameter) — **not** an [ActiveLookColorPalette] byte, on
+  /// any hardware. For real color text on color-panel glasses use
+  /// [rawTextColor] (`0x3E txtColor`) instead — see that method's doc
+  /// comment, and [color]-the-method's doc comment for the same
+  /// grayscale-vs-color distinction found on real hardware (2026-09-02).
   Future<void> text(
     int x,
     int y,
@@ -138,6 +159,41 @@ class ActivelookSdk {
   // --- Layouts (ActiveLook_API.md §4.11) ---
 
   Future<void> layoutSave(ActiveLookLayoutParameters layout) => _platform.layoutSave(layout);
+
+  /// As [layoutSave], but interprets [layout]'s
+  /// foregroundColor/backgroundColor as [ActiveLookColorPalette] bytes
+  /// (`COLOR_VERSION`/`0x6B layoutSaveInColor`) instead of grey levels —
+  /// color-panel (`MDP08`) glasses only. See
+  /// [ActivelookSdkPlatform.layoutSaveInColor]'s doc comment for why this
+  /// needs its own method rather than being a flag on [layoutSave].
+  Future<void> layoutSaveInColor(ActiveLookLayoutParameters layout) =>
+      _platform.layoutSaveInColor(layout);
+
+  /// The real `0x3D color` command — see
+  /// [ActivelookSdkPlatform.rawColor]'s doc comment on why this is
+  /// distinct from [color], which is actually wired to `0x30 grayscale` on
+  /// both native SDKs despite its name (found on real hardware,
+  /// 2026-09-02). Color-panel glasses only.
+  Future<void> rawColor(int value) => _platform.rawColor(value);
+
+  /// The real `0x3E txtColor` command — as [text], but [colorValue] is an
+  /// [ActiveLookColorPalette] byte, not a grey level. See [rawColor]'s doc
+  /// comment.
+  Future<void> rawTextColor(
+    int x,
+    int y,
+    ActiveLookTextRotation rotation,
+    int fontSize,
+    int colorValue,
+    String text,
+  ) =>
+      _platform.rawTextColor(x, y, rotation, fontSize, colorValue, text);
+
+  /// Sends pre-built command frames straight to the device - see
+  /// [ActivelookSdkPlatform.sendRawFrames]'s doc comment. Used for
+  /// `animSave`, whose frames are pre-encoded offline (not built at
+  /// runtime, unlike [layoutSaveInColor]/[rawColor]).
+  Future<void> sendRawFrames(List<List<int>> frames) => _platform.sendRawFrames(frames);
 
   /// Displays [text] using the previously saved layout [id], at the
   /// layout's saved position.

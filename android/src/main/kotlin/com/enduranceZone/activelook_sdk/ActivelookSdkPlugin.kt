@@ -7,6 +7,8 @@ import com.activelook.activelooksdk.DiscoveredGlasses
 import com.activelook.activelooksdk.Glasses
 import com.activelook.activelooksdk.Sdk
 import com.activelook.activelooksdk.SerializedGlasses
+import com.activelook.activelooksdk.core.Command
+import com.activelook.activelooksdk.core.CommandData
 import com.activelook.activelooksdk.types.Configuration
 import com.activelook.activelooksdk.types.DemoPattern
 import com.activelook.activelooksdk.types.FlowControlStatus
@@ -154,9 +156,39 @@ class ActivelookSdkPlugin :
                     result.error("NOT_FOUND", "No device id given to connect.", null)
                     return
                 }
+                // `result` must resolve exactly once, from whichever of onConnected/
+                // onConnectionFail fires first - confirmed on real hardware (2026-09-02)
+                // that the previous version called result.success(null) unconditionally,
+                // immediately after dispatching dg.connect()/Sdk.connect() below, rather
+                // than waiting for either callback. That made the Dart-side `await
+                // sdk.connect(id)` resolve as soon as the native connect *attempt* was
+                // merely dispatched - not once a real GATT connection existed - so
+                // RaceModeGlassesHud._onConnected's very next call (sdk.settings())
+                // could race a connection that was still mid-handshake and hang/fail
+                // silently. A debugger breakpoint placed between the two masked this
+                // completely (it gave the real handshake time to finish before the next
+                // command fired), which is why the bug only reproduced without one.
+                var resultDelivered = false
+                fun deliverSuccess() {
+                    if (resultDelivered) return
+                    resultDelivered = true
+                    result.success(null)
+                }
+                fun deliverFailure(message: String) {
+                    if (resultDelivered) return
+                    resultDelivered = true
+                    result.error("CONNECT_FAILED", message, null)
+                }
+
                 val onConnected = { glasses: Glasses ->
                     onMain {
                         connectedGlasses = glasses
+                        // Real onDisconnected (fires later, after this connect() call has
+                        // already resolved) - was previously wired from the parameter
+                        // meant for onConnectionFail, per android-sdk's own
+                        // DiscoveredGlasses.connect/Sdk.connect Javadoc parameter order
+                        // (onConnected, onConnectionFail, onDisconnected) - confirmed by
+                        // reading both directly. Kept separate from onConnectionFail below.
                         glasses.setOnDisconnected {
                             onMain {
                                 connectedGlasses = null
@@ -164,12 +196,14 @@ class ActivelookSdkPlugin :
                             }
                         }
                         connectionStateSink?.success("connected")
+                        deliverSuccess()
                     }
                 }
-                val onConnectionFailed = { _: Glasses? ->
+                val onConnectionFail = { _: DiscoveredGlasses? ->
                     onMain {
                         connectedGlasses = null
                         connectionStateSink?.success("disconnected")
+                        deliverFailure("Connection failed")
                     }
                 }
                 onMain { connectionStateSink?.success("connecting") }
@@ -180,8 +214,12 @@ class ActivelookSdkPlugin :
                     // scan callback handed us, as before.
                     dg.connect(
                         onConnected,
+                        onConnectionFail,
+                        // onDisconnected - unused here, set for real on the connected
+                        // Glasses instance instead (see onConnected above), since this
+                        // one only fires if this exact DiscoveredGlasses.connect() call
+                        // itself reports a disconnect before ever reaching onConnected.
                         { _ -> onMain { connectionStateSink?.success("disconnected") } },
-                        onConnectionFailed,
                     )
                 } else {
                     // No scan this process (e.g. app cold-started and the Flutter
@@ -196,11 +234,10 @@ class ActivelookSdkPlugin :
                     ensureSdk().connect(
                         SavedGlasses(id),
                         onConnected,
+                        onConnectionFail,
                         { _ -> onMain { connectionStateSink?.success("disconnected") } },
-                        onConnectionFailed,
                     )
                 }
-                result.success(null)
             }
             "disconnect" -> {
                 connectedGlasses?.disconnect()
@@ -258,6 +295,40 @@ class ActivelookSdkPlugin :
                 result.success(null)
             }
             "color" -> withGlasses(result) { g -> g.color(call.requireInt("level").toByte()); result.success(null) }
+            "rawColor" -> withGlasses(result) { g ->
+                sendRawCommand(g, ID_rawColor, CommandData(call.requireInt("value").toByte()))
+                result.success(null)
+            }
+            "rawTextColor" -> withGlasses(result) { g ->
+                val data = CommandData()
+                    .addInt16(call.requireInt("x").toShort(), call.requireInt("y").toShort())
+                    .add(CommandData.fromRotation(rotationFromDartName(call.requireString("rotation"))))
+                    .addUInt8(call.requireInt("fontSize").toShort(), call.requireInt("colorValue").toShort())
+                    .addNulTerminatedStrings(call.requireString("text"))
+                sendRawCommand(g, ID_rawTextColor, data)
+                result.success(null)
+            }
+            "sendRawFrames" -> withGlasses(result) { g ->
+                val frames = call.argument<List<*>>("frames") ?: emptyList<Any?>()
+                // Each frame normally arrives as a List<*> of Int (the Dart side sends
+                // List<int>), but the standard method channel codec encodes a Dart Uint8List
+                // specifically as a Kotlin ByteArray instead - handled here defensively since
+                // that mismatch crashed this exact cast on real hardware once already
+                // (2026-09-02: "byte[] cannot be cast to java.util.List") before the Dart side
+                // was fixed to always send plain List<int> (List<int>.of(...), not a
+                // Uint8List.sublist() result).
+                val hexLines = frames.joinToString("\n") { frame ->
+                    when (frame) {
+                        is ByteArray -> frame.joinToString("") { "%02X".format(it) }
+                        is List<*> -> frame.joinToString("") { "%02X".format((it as Int)) }
+                        else -> throw IllegalArgumentException(
+                            "sendRawFrames: unexpected frame type ${frame?.javaClass}",
+                        )
+                    }
+                }
+                g.loadConfiguration(hexLines.reader().buffered())
+                result.success(null)
+            }
             "point" -> withGlasses(result) { g ->
                 g.point(call.requireInt("x").toShort(), call.requireInt("y").toShort())
                 result.success(null)
@@ -332,6 +403,33 @@ class ActivelookSdkPlugin :
                     )
                 }
                 g.layoutSave(layout)
+                result.success(null)
+            }
+            "layoutSaveInColor" -> withGlasses(result) { g ->
+                val layout = LayoutParameters(
+                    call.requireInt("id").toByte(),
+                    call.requireInt("x").toShort(),
+                    call.requireInt("y").toByte(),
+                    call.requireInt("width").toShort(),
+                    call.requireInt("height").toByte(),
+                    call.requireInt("foregroundColor").toByte(),
+                    call.requireInt("backgroundColor").toByte(),
+                    call.requireInt("font").toByte(),
+                    call.argument<Boolean>("textValid") ?: true,
+                    call.requireInt("textX").toShort(),
+                    call.requireInt("textY").toByte(),
+                    rotationFromDartName(call.requireString("textRotation")),
+                    call.argument<Boolean>("textOpacity") ?: true,
+                )
+                val imageId = call.argument<Int>("imageId")
+                if (imageId != null) {
+                    layout.addSubCommandBitmap(
+                        imageId.toByte(),
+                        call.requireInt("imageX").toShort(),
+                        call.requireInt("imageY").toShort(),
+                    )
+                }
+                sendRawCommand(g, ID_layoutSaveInColor, CommandData(*layout.toBytes()))
                 result.success(null)
             }
             "layoutDisplay" -> withGlasses(result) { g ->
@@ -606,6 +704,41 @@ class ActivelookSdkPlugin :
         flowControlChannel.setStreamHandler(null)
         sensorTapChannel.setStreamHandler(null)
     }
+}
+
+// Command IDs android-sdk doesn't expose under any method (confirmed by reading
+// com.activelook.activelooksdk.core.AbstractGlasses source directly — see each constant's own
+// comment below for what's actually wired instead). Values from ActiveLook_API.md §4.6/§4.11.
+//
+// IMPORTANT, found the hard way on real hardware (2026-09-02): AbstractGlasses.color(byte)
+// is NOT the protocol's 0x3D `color` command — its own ID_color constant is 0x30, which is
+// `grayscale` in ActiveLook_API.md, and it routes the byte through
+// CommandData.fromGreyLevel(), which asserts 0-15 and crashed the app when a real RG palette
+// byte (e.g. 60) was passed. Both android-sdk's and ios-sdk's `color()` methods are wired to
+// the grayscale opcode despite the name/doc-comment describing color — 0x3D `color` and 0x3E
+// `txtColor` don't exist anywhere in either native SDK. rawColor/rawTextColor below reach the
+// real opcodes directly instead.
+private const val ID_layoutSaveInColor: Byte = 0x6B
+private const val ID_rawColor: Byte = 0x3D
+private const val ID_rawTextColor: Byte = 0x3E
+
+/**
+ * Sends a command android-sdk's `Glasses` interface doesn't wrap, via `loadConfiguration` —
+ * android-sdk's public raw-command escape hatch (confirmed public on both the `Glasses`
+ * interface and `AbstractGlasses`; it hex-decodes each line of a `BufferedReader` and writes
+ * the bytes straight to the device, same as every typed command does internally).
+ *
+ * [data] is built via android-sdk's own public `CommandData`/`Command` classes (both in
+ * `com.activelook.activelooksdk.core`, confirmed public), the same ones every typed command
+ * (`layoutSave`, `txt`, etc.) uses internally — so the frame byte layout is guaranteed
+ * identical to a real command, not hand-rolled/re-derived here (see this repo's earlier
+ * `sendRawCommand` version, replaced 2026-09-02 after getting `color()`'s own byte semantics
+ * wrong reading only its doc comment rather than its actual assert/opcode).
+ */
+private fun sendRawCommand(glasses: Glasses, commandId: Byte, data: CommandData) {
+    val frame = Command(commandId, data).toBytes()
+    val hex = frame.joinToString("") { "%02X".format(it) }
+    glasses.loadConfiguration(hex.reader().buffered())
 }
 
 private fun MethodCall.requireInt(key: String): Int =

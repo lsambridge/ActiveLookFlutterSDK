@@ -214,6 +214,36 @@ class MethodChannelActivelookSdk extends ActivelookSdkPlatform {
       methodChannel.invokeMethod<void>('layoutSave', layout.toMap());
 
   @override
+  Future<void> layoutSaveInColor(ActiveLookLayoutParameters layout) =>
+      methodChannel.invokeMethod<void>('layoutSaveInColor', layout.toMap());
+
+  @override
+  Future<void> rawColor(int value) => methodChannel.invokeMethod<void>('rawColor', {'value': value});
+
+  @override
+  Future<void> rawTextColor(
+    int x,
+    int y,
+    ActiveLookTextRotation rotation,
+    int fontSize,
+    int colorValue,
+    String text,
+  ) {
+    return methodChannel.invokeMethod<void>('rawTextColor', {
+      'x': x,
+      'y': y,
+      'rotation': rotation.name,
+      'fontSize': fontSize,
+      'colorValue': colorValue,
+      'text': text,
+    });
+  }
+
+  @override
+  Future<void> sendRawFrames(List<List<int>> frames) =>
+      methodChannel.invokeMethod<void>('sendRawFrames', {'frames': frames});
+
+  @override
   Future<void> layoutDisplay(int id, String text) =>
       methodChannel.invokeMethod<void>('layoutDisplay', {'id': id, 'text': text});
 

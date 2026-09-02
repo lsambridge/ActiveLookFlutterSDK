@@ -170,6 +170,79 @@ abstract class ActivelookSdkPlatform extends PlatformInterface {
     throw UnimplementedError('layoutSave() has not been implemented.');
   }
 
+  /// As [layoutSave], but saves the layout under the `COLOR_VERSION` layout
+  /// format (`ActiveLook_API.md` §4.11, command `0x6B layoutSaveInColor`) so
+  /// [ActiveLookLayoutParameters.foregroundColor]/[backgroundColor] are
+  /// interpreted as [ActiveLookColorPalette] RG bytes on color-panel
+  /// (`MDP08`) glasses, instead of `layoutSave`'s grey-level (`0x60
+  /// GRAYSCALE_VERSION`) interpretation. Color-panel hardware only — see
+  /// [ActiveLookColorPalette]'s doc comment.
+  ///
+  /// Neither native SDK exposes this command (confirmed by reading both
+  /// `android-sdk`/`ios-sdk` source directly: `0x6B` has no wrapper on
+  /// either platform, only the grayscale `0x60 layoutSave`), so this is
+  /// implemented by hand-building the raw command frame and sending it
+  /// through each native SDK's own `loadConfiguration` raw-command escape
+  /// hatch — see this repo's plan doc for why that's preferred over a raw
+  /// BLE GATT connection of our own: it reuses the native SDK's existing
+  /// connection, flow-control, and send-queue handling rather than
+  /// reimplementing them.
+  Future<void> layoutSaveInColor(ActiveLookLayoutParameters layout) {
+    throw UnimplementedError('layoutSaveInColor() has not been implemented.');
+  }
+
+  /// The real `0x3D color` command (`ActiveLook_API.md` §4.6) — an
+  /// [ActiveLookColorPalette] RG byte on color-panel (`MDP08`) glasses.
+  ///
+  /// **Not the same wire command as [color]**, despite the similar name.
+  /// Found on real hardware (2026-09-02): both native SDKs' `color(level)`
+  /// method is wired to `0x30 grayscale` (asserts/clamps 0-15) — neither
+  /// SDK exposes the real `0x3D color` under any name. This method reaches
+  /// it directly via the same raw-command approach as [layoutSaveInColor].
+  /// Color-panel hardware only — passing a value outside the 81-entry
+  /// palette is meaningless on grey-level (`MDP05`) glasses.
+  Future<void> rawColor(int value) {
+    throw UnimplementedError('rawColor() has not been implemented.');
+  }
+
+  /// The real `0x3E txtColor` command (`ActiveLook_API.md` §4.6) — as
+  /// [text], but [colorValue] is an [ActiveLookColorPalette] RG byte
+  /// instead of [text]'s grey-level parameter. See [rawColor]'s doc
+  /// comment on why this needs its own method rather than reusing [text].
+  Future<void> rawTextColor(
+    int x,
+    int y,
+    ActiveLookTextRotation rotation,
+    int fontSize,
+    int colorValue,
+    String text,
+  ) {
+    throw UnimplementedError('rawTextColor() has not been implemented.');
+  }
+
+  /// Sends a list of already wire-complete command frames (each a full
+  /// `ActiveLook_API.md` §3.1 frame: `0xFF` header, command id, format,
+  /// length, data, `0xAA` footer) straight to the device, via each native
+  /// SDK's own `loadConfiguration` raw-command escape hatch - see
+  /// [layoutSaveInColor]'s doc comment on why that's the right mechanism
+  /// (reuses the SDK's own connection/flow-control/send-queue rather than a
+  /// raw BLE connection of our own).
+  ///
+  /// Unlike [layoutSaveInColor]/[rawColor], this doesn't build the frame
+  /// itself - it takes bytes already produced by a real encoder. Used for
+  /// `animSave` (`ActiveLook_API.md` §4.12/§5.6.1): neither native SDK
+  /// wraps that command at all, and its delta-frame encoding (reference
+  /// frame + per-frame line-diffs) is involved enough that hand-rolling it
+  /// here without hardware to verify against would be a real correctness
+  /// risk - so those frames are pre-encoded offline instead, using
+  /// ActiveLook's own reference Python encoder (`Config-Generator`'s
+  /// `ALookCom/anim.py`, the same tool used to build the pre-installed
+  /// `ALooK` configuration's own animations) against the real animation
+  /// asset, then bundled as a static app asset and replayed here unchanged.
+  Future<void> sendRawFrames(List<List<int>> frames) {
+    throw UnimplementedError('sendRawFrames() has not been implemented.');
+  }
+
   Future<void> layoutDisplay(int id, String text) {
     throw UnimplementedError('layoutDisplay() has not been implemented.');
   }

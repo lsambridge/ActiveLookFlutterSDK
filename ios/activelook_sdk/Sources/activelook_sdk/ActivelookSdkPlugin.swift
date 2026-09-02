@@ -103,6 +103,32 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "NOT_FOUND", message: "No device id given to connect.", details: nil))
                 return
             }
+            // `result` must resolve exactly once, from whichever of onGlassesConnected/
+            // onConnectionError fires first - confirmed on real hardware (2026-09-02,
+            // Android build of this same handler) that the previous version called
+            // result(nil) unconditionally, immediately after dispatching dg.connect()/
+            // sdk().connect() below, rather than waiting for either callback. That made
+            // the Dart-side `await sdk.connect(id)` resolve as soon as the native connect
+            // *attempt* was merely dispatched - not once a real GATT/CoreBluetooth
+            // connection existed - so RaceModeGlassesHud._onConnected's very next call
+            // (sdk.settings()) could race a connection still mid-handshake and hang/fail
+            // silently. A debugger breakpoint placed between the two masked this
+            // completely on Android (gave the real handshake time to finish before the
+            // next command fired) - fixed here defensively too since this iOS build has
+            // no toolchain available to reproduce/verify the bug directly, only reason
+            // about the parallel structure.
+            var resultDelivered = false
+            func deliverSuccess() {
+                if resultDelivered { return }
+                resultDelivered = true
+                result(nil)
+            }
+            func deliverFailure(_ message: String, code: String = "CONNECT_FAILED") {
+                if resultDelivered { return }
+                resultDelivered = true
+                result(FlutterError(code: code, message: message, details: nil))
+            }
+
             let onConnected: (Glasses) -> Void = { [weak self] glasses in
                 guard let self = self else { return }
                 self.onMain {
@@ -114,12 +140,20 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                         }
                     }
                     self.connectionStateSink?("connected")
+                    deliverSuccess()
                 }
             }
             let onDisconnected: () -> Void = { [weak self] in
                 self?.onMain {
                     self?.connectedGlasses = nil
                     self?.connectionStateSink?("disconnected")
+                }
+            }
+            let onConnectionError: (Error) -> Void = { [weak self] error in
+                self?.onMain {
+                    self?.connectedGlasses = nil
+                    self?.connectionStateSink?("disconnected")
+                    deliverFailure(error.localizedDescription)
                 }
             }
             onMain { self.connectionStateSink?("connecting") }
@@ -130,11 +164,8 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                 dg.connect(
                     onGlassesConnected: onConnected,
                     onGlassesDisconnected: onDisconnected,
-                    onConnectionError: { [weak self] _ in
-                        self?.onMain { self?.connectionStateSink?("disconnected") }
-                    }
+                    onConnectionError: onConnectionError
                 )
-                result(nil)
             } else if let serialized = Self.serializedGlasses(forId: id) {
                 // No scan this process (e.g. app cold-started and the Flutter
                 // side reconnects straight from a saved device id, deliberately
@@ -151,18 +182,18 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                         using: serialized,
                         onGlassesConnected: onConnected,
                         onGlassesDisconnected: onDisconnected,
-                        onConnectionError: { [weak self] _ in
-                            self?.onMain { self?.connectionStateSink?("disconnected") }
-                        }
+                        onConnectionError: onConnectionError
                     )
-                    result(nil)
                 } catch {
                     onMain { self.connectionStateSink?("disconnected") }
-                    result(FlutterError(code: "SDK_ERROR", message: error.localizedDescription, details: nil))
+                    deliverFailure(error.localizedDescription)
                 }
             } else {
                 onMain { self.connectionStateSink?("disconnected") }
-                result(FlutterError(code: "NOT_FOUND", message: "No discovered glasses with id \(id) and could not build a serialized reconnect payload.", details: nil))
+                deliverFailure(
+                    "No discovered glasses with id \(id) and could not build a serialized reconnect payload.",
+                    code: "NOT_FOUND"
+                )
             }
 
         case "disconnect":
@@ -229,6 +260,58 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
 
         case "color":
             withGlasses(result: result) { g in g.color(level: UInt8(requireInt("level") ?? 0)); result(nil) }
+        case "rawColor":
+            withGlasses(result: result) { g in
+                Self.sendRawCommand(g, commandId: 0x3D, data: [UInt8(requireInt("value") ?? 0)])
+                result(nil)
+            }
+        case "rawTextColor":
+            withGlasses(result: result) { g in
+                var data: [UInt8] = []
+                data.append(contentsOf: Self.bigEndianInt16(Int16(requireInt("x") ?? 0)))
+                data.append(contentsOf: Self.bigEndianInt16(Int16(requireInt("y") ?? 0)))
+                data.append(Self.textRotation(from: requireString("rotation") ?? "topLeftToRight").rawValue)
+                data.append(UInt8(requireInt("fontSize") ?? 0))
+                data.append(UInt8(requireInt("colorValue") ?? 0))
+                // android-sdk's addNulTerminatedStrings uses US_ASCII, confirmed by reading
+                // CommandData.java directly - matched here rather than UTF-8 to keep both
+                // platforms byte-identical for any non-ASCII input, even though this command
+                // is only ever used with plain ASCII debug strings today.
+                data.append(contentsOf: Array((requireString("text") ?? "").data(using: .ascii) ?? Data()))
+                data.append(0x00)
+                Self.sendRawCommand(g, commandId: 0x3E, data: data)
+                result(nil)
+            }
+        case "sendRawFrames":
+            withGlasses(result: result) { g in
+                // Framework-standard-codec nested lists bridge to [Any] of [Any] on iOS, not
+                // directly to [[Int]] - cast defensively per-element (each inner value arrives
+                // as NSNumber) rather than risk a single all-or-nothing [[Int]] cast silently
+                // producing an empty array on a bridging mismatch this file's author can't
+                // verify without a Swift toolchain (2026-09-02).
+                //
+                // A Dart Uint8List frame specifically bridges to FlutterStandardTypedData (or
+                // plain Data) here, not [Any] - confirmed by the Android build of this same
+                // handler crashing on real hardware with exactly that mismatch ("byte[] cannot
+                // be cast to java.util.List") before the Dart side was fixed to always send a
+                // plain List<int>. Handled defensively here too since an unhandled case would
+                // have silently dropped that frame via compactMap rather than erroring loudly.
+                let framesAny = (args["frames"] as? [Any]) ?? []
+                let hexLines: [String] = framesAny.compactMap { frameAny -> String? in
+                    if let typedData = frameAny as? FlutterStandardTypedData {
+                        return typedData.data.map { String(format: "%02X", $0) }.joined()
+                    }
+                    if let data = frameAny as? Data {
+                        return data.map { String(format: "%02X", $0) }.joined()
+                    }
+                    guard let frame = frameAny as? [Any] else { return nil }
+                    let bytes = frame.compactMap { ($0 as? NSNumber)?.uint8Value }
+                    guard bytes.count == frame.count else { return nil }
+                    return bytes.map { String(format: "%02X", $0) }.joined()
+                }
+                g.loadConfiguration(cfg: hexLines)
+                result(nil)
+            }
         case "point":
             withGlasses(result: result) { g in
                 g.point(x: Int16(requireInt("x") ?? 0), y: Int16(requireInt("y") ?? 0))
@@ -318,6 +401,33 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                     )
                 }
                 g.layoutSave(parameters: layout)
+                result(nil)
+            }
+        case "layoutSaveInColor":
+            withGlasses(result: result) { g in
+                let layout = LayoutParameters(
+                    id: UInt8(requireInt("id") ?? 0),
+                    x: UInt16(requireInt("x") ?? 0),
+                    y: UInt8(requireInt("y") ?? 0),
+                    width: UInt16(requireInt("width") ?? 0),
+                    height: UInt8(requireInt("height") ?? 0),
+                    foregroundColor: UInt8(requireInt("foregroundColor") ?? 15),
+                    backgroundColor: UInt8(requireInt("backgroundColor") ?? 0),
+                    font: UInt8(requireInt("font") ?? 0),
+                    textValid: (args["textValid"] as? Bool) ?? true,
+                    textX: UInt16(requireInt("textX") ?? 0),
+                    textY: UInt8(requireInt("textY") ?? 0),
+                    textRotation: Self.textRotation(from: requireString("textRotation") ?? "topLeftToRight"),
+                    textOpacity: (args["textOpacity"] as? Bool) ?? true
+                )
+                if let imageId = requireInt("imageId") {
+                    _ = layout.addSubCommandBitmap(
+                        id: UInt8(imageId),
+                        x: Int16(requireInt("imageX") ?? 0),
+                        y: Int16(requireInt("imageY") ?? 0)
+                    )
+                }
+                Self.sendRawCommand(g, commandId: 0x6B, data: layout.toCommandData())
                 result(nil)
             }
         case "layoutDisplay":
@@ -645,6 +755,37 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
             return
         }
         body(g)
+    }
+
+    // 0x6B layoutSaveInColor (ActiveLook_API.md §4.11) — not exposed by ios-sdk's `Glasses`
+    // (confirmed by reading Glasses.swift directly: only the grayscale 0x60 layoutSave is
+    // wrapped, via `sendCommand(id: .layoutSave, ...)`, and `sendCommand`/the peripheral/
+    // characteristic are all private/internal, unreachable from outside the SDK). This builds
+    // the same frame ios-sdk's own private `sendCommand` builds and sends it via
+    // `loadConfiguration` — ios-sdk's public raw-command escape hatch (`Glasses.swift`,
+    // `loadConfiguration(cfg: [String])`, confirmed public: takes hex-string lines and queues
+    // them exactly like every typed command does internally).
+    //
+    // Byte layout: ActiveLook_API.md §3.1's frame, no Query ID, 1-byte Length format — correct
+    // for every command this bridge sends this way (layout payloads are 17-126 bytes, nowhere
+    // near the ~250-byte threshold where the protocol's 2-byte-Length format would be needed).
+    private static func sendRawCommand(_ glasses: Glasses, commandId: UInt8, data: [UInt8]) {
+        let fullLength = 5 + data.count
+        precondition(fullLength <= 0xFF, "sendRawCommand: frame too large for 1-byte length (\(fullLength) bytes)")
+        var frame: [UInt8] = [0xFF, commandId, 0x00, UInt8(fullLength)]
+        frame.append(contentsOf: data)
+        frame.append(0xAA)
+        let hex = frame.map { String(format: "%02X", $0) }.joined()
+        glasses.loadConfiguration(cfg: [hex])
+    }
+
+    /// `ActiveLook_API.md` §3.1: "All data are in Big Endian" — confirmed against
+    /// `com.activelook.activelooksdk.core.CommandData.Int16.asBytes` on the Android side (high
+    /// byte first), used here for `rawTextColor`'s x/y fields since ios-sdk's own
+    /// `Int16.asUInt8Array` equivalent isn't reachable from outside the SDK module.
+    private static func bigEndianInt16(_ value: Int16) -> [UInt8] {
+        let bits = UInt16(bitPattern: value)
+        return [UInt8(bits >> 8), UInt8(bits & 0xFF)]
     }
 
     private static func ledState(from name: String) -> LedState {

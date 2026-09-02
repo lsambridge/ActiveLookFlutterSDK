@@ -54,6 +54,62 @@ enum ActiveLookTextRotation {
 
 enum ActiveLookLedState { off, on, toggle, blink }
 
+/// The 81-color RG (red-green) palette for `MDP08` color-panel glasses,
+/// used with `ActivelookSdk.rawColor()`/`rawTextColor()`/
+/// `layoutSaveInColor()` (`ActiveLook_API.md` §4.6/§4.11/§5.5.5) — **not**
+/// `color()`/`text()`, which are grey-level (`0-15`) only despite the
+/// name, confirmed on real hardware (2026-09-02): see `rawColor()`'s doc
+/// comment. Transcribed directly from the reference palette image
+/// (`ActiveLook_RRGG_colors.png`) — a 9x9 grid of red level (0-8) x green
+/// level (0-8), each cell giving the single 0-255 byte for that hue.
+///
+/// This is a hardcoded lookup table, not a computed bit-packing formula:
+/// the byte values are not evenly-spaced/simple bit fields (e.g. red=0
+/// green=0..8 is `0x00, 0x01, 0x02, 0x41, 0x81, 0x82, 0x43, 0x83, 0xC3`), so
+/// transcribing the reference image directly avoids getting the packing
+/// wrong without real color-panel hardware to verify a formula against.
+class ActiveLookColorPalette {
+  ActiveLookColorPalette._();
+
+  /// [redLevel] and [greenLevel] are each 0-8 (9 levels), matching the
+  /// reference palette's rows/columns. Throws [RangeError] outside that
+  /// range.
+  static int byte(int redLevel, int greenLevel) {
+    if (redLevel < 0 || redLevel > 8) {
+      throw RangeError.value(redLevel, 'redLevel', 'must be 0-8');
+    }
+    if (greenLevel < 0 || greenLevel > 8) {
+      throw RangeError.value(greenLevel, 'greenLevel', 'must be 0-8');
+    }
+    return _table[redLevel][greenLevel];
+  }
+
+  /// Row index = red level (0-8), column index = green level (0-8).
+  static const List<List<int>> _table = [
+    [0x00, 0x01, 0x02, 0x41, 0x81, 0x82, 0x43, 0x83, 0xC3],
+    [0x04, 0x05, 0x06, 0x45, 0x85, 0x86, 0x47, 0x87, 0xC7],
+    [0x20, 0x21, 0x22, 0x61, 0xA1, 0xA2, 0x63, 0xA3, 0xE3],
+    [0x14, 0x15, 0x16, 0x55, 0x95, 0x96, 0x57, 0x97, 0xD7],
+    [0x18, 0x19, 0x1A, 0x59, 0x99, 0x9A, 0x5B, 0x9B, 0xDB],
+    [0x28, 0x29, 0x2A, 0x69, 0xA9, 0xAA, 0x6B, 0xAB, 0xEB],
+    [0x1C, 0x1D, 0x1E, 0x5D, 0x9D, 0x9E, 0x5F, 0x9F, 0xDF],
+    [0x38, 0x39, 0x3A, 0x79, 0xB9, 0xBA, 0x7B, 0xBB, 0xFB],
+    [0x3C, 0x3D, 0x3E, 0x7D, 0xBD, 0xBE, 0x7F, 0xBF, 0xFF],
+  ];
+
+  /// Black — red=0, green=0.
+  static const int black = 0x00;
+
+  /// Pure red — red=8, green=0.
+  static const int red = 0x3C;
+
+  /// Pure green — red=0, green=8.
+  static const int green = 0xC3;
+
+  /// Full red + full green (yellow-ish on an RG-only display) — red=8, green=8.
+  static const int yellow = 0xFF;
+}
+
 /// The device's persisted per-unit settings (`ActiveLook_API.md` §4.3's
 /// `settings` command, `0x0A`) — read them via `ActivelookSdk.settings()`.
 ///
