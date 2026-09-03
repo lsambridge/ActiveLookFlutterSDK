@@ -52,6 +52,30 @@ how both native SDKs are built.
 the 1bpp format (see [Known issues](known-issues.md)) — test 1bpp streaming specifically on iOS
 before relying on it.
 
+### Drawing an image in color {#image-color}
+
+**Every image format is mono** — there is no color image format, and no color equivalent of
+`imgDisplay` the way `0x3E txtColor` is the color equivalent of `0x37 txt`. To get a colored image
+on color-panel (`MDP08`) glasses you compose the two commands that do exist: `rawColor()`
+(`0x3D color`, an `ActiveLookColorPalette` byte) to set the draw color, then `imgDisplay`, which
+renders the saved image with it. `ActiveLookSafeCanvas.imageInColor(id, x, y, colorValue)` wraps
+that pair.
+
+This only reads as a recolor for an image saved as **`mono1bpp`**: a 1bpp image is a stencil (each
+pixel on/off), so its set pixels take the current color. A `mono4bpp` image carries its own 16 grey
+levels per pixel and keeps them, making the color call a no-op — save the asset as 1bpp if you want
+to tint it.
+
+```dart
+await sdk.imgSave(1, bytes, ActiveLookImageFormat.mono1bpp);  // 1bpp, so it can be tinted
+await canvas.imageInColor(1, 20, 20, ActiveLookColorPalette.green);
+```
+
+`rawColor` sets device **state**, not a per-draw parameter, so the color stays in effect for any
+later color-parameterless draw in the same frame (`point`, `line`, `rect`, `circle`, further
+`image` calls). `text`/`rawTextColor` each carry their own color argument and are unaffected. Set
+the color you want before those draws rather than relying on what a previous call left behind.
+
 ## Fonts {#fonts}
 
 ```dart

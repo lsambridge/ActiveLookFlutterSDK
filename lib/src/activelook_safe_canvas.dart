@@ -117,6 +117,39 @@ class ActiveLookSafeCanvas {
     return _sdk.imgDisplay(imageId, dx, dy);
   }
 
+  /// As [image], but draws the image in [colorValue] (an
+  /// [ActiveLookColorPalette] byte) instead of its own saved pixel values -
+  /// the image analogue of [rawTextColor], and like it, color-panel
+  /// (`MDP08`) glasses only.
+  ///
+  /// **This is not a color-image command - there isn't one.** The protocol
+  /// has no color equivalent of `0x41 imgDisplay` the way `0x3E txtColor`
+  /// is the color equivalent of `0x37 txt`, and `imgSave` accepts only
+  /// mono formats ([ActiveLookImageFormat] is `mono4bpp`/`mono1bpp`/the
+  /// two heatshrink variants - no color format exists on either native
+  /// SDK). So this composes the two commands that do exist: `0x3D color`
+  /// (via [rawColor]) to set the draw color, then `imgDisplay`, which
+  /// renders the saved image with it.
+  ///
+  /// That composition only reads as a recolor for an image saved as
+  /// [ActiveLookImageFormat.mono1bpp] - a 1bpp image is a stencil (each
+  /// pixel on/off), so its set pixels take the current color. A `mono4bpp`
+  /// image carries its own 16 grey levels per pixel and will keep them,
+  /// making this call a no-op on it: save the asset as 1bpp if you want to
+  /// tint it here.
+  ///
+  /// Because [rawColor] sets device *state* rather than being a per-draw
+  /// parameter, [colorValue] stays in effect for any later
+  /// color-parameterless draw in the same frame - [point], [line],
+  /// [rect]/[rectFilled], [circle]/[circleFilled] and further [image]
+  /// calls. ([text]/[rawTextColor] each carry their own color argument and
+  /// are unaffected.) Set the color you want before those draws rather
+  /// than relying on whatever this call left behind.
+  Future<void> imageInColor(int imageId, int x, int y, int colorValue) async {
+    await rawColor(colorValue);
+    await image(imageId, x, y);
+  }
+
   /// Sets the color/grey value used to draw the next shape - passthrough to
   /// `ActivelookSdk.rawColor`, no coordinate translation needed since this
   /// sets state rather than drawing. See that method's doc comment: this is
