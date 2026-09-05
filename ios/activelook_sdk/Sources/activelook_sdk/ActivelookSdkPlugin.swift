@@ -369,7 +369,7 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                 var points: [Point] = []
                 var i = 0
                 while i + 1 < xys.count {
-                    points.append((x: UInt16(xys[i]), y: UInt16(xys[i + 1])))
+                    points.append((x: Self.clampToUInt16(xys[i]), y: Self.clampToUInt16(xys[i + 1])))
                     i += 2
                 }
                 g.polyline(thickness: UInt8(requireInt("thickness") ?? 1), points: points)
@@ -786,6 +786,16 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
     private static func bigEndianInt16(_ value: Int16) -> [UInt8] {
         let bits = UInt16(bitPattern: value)
         return [UInt8(bits >> 8), UInt8(bits & 0xFF)]
+    }
+
+    // `UInt16(_ v: Int)` traps on negative or >65535 input instead of throwing -
+    // fatal for the whole plugin/BLE connection, not just the one draw call.
+    // `polyline` points come from Dart-side screen-space math (rotation,
+    // route windowing) that isn't bounds-checked before crossing the
+    // platform channel, unlike other draw calls whose coordinates are culled
+    // to the visible screen before being sent. Clamp instead of trapping.
+    private static func clampToUInt16(_ value: Int) -> UInt16 {
+        UInt16(max(0, min(value, Int(UInt16.max))))
     }
 
     private static func ledState(from name: String) -> LedState {
