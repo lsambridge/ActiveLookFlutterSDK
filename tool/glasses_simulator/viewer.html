@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ActiveLook Glasses Simulator</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    background: #111;
+    color: #ccc;
+    font-family: -apple-system, Segoe UI, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+  }
+  h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #888; margin: 0 0 12px; }
+  #status { font-size: 12px; margin-bottom: 12px; }
+  #status.connected { color: #4caf50; }
+  #status.disconnected { color: #e05a4e; }
+  #screen-wrap {
+    background: #000;
+    border: 2px solid #333;
+    border-radius: 6px;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+  canvas { display: block; image-rendering: pixelated; }
+  #log {
+    margin-top: 16px;
+    width: 608px;
+    max-height: 160px;
+    overflow-y: auto;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11px;
+    padding: 8px;
+    color: #888;
+  }
+  #log div:last-child { color: #ccc; }
+  #tap-btn {
+    margin-top: 16px;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #ccc;
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #tap-btn:hover { background: #2c2c2c; }
+  #tap-btn:active { background: #383838; }
+  #unflip-label {
+    display: block;
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  #unflip-label input { vertical-align: middle; margin-right: 6px; }
+</style>
+</head>
+<body>
+<h1>ActiveLook Glasses Simulator</h1>
+<div id="status" class="disconnected">connecting to simulator server…</div>
+<label id="unflip-label">
+  <input type="checkbox" id="unflip-checkbox" />
+  Un-flip coordinates (undo this unit's 180&deg; hardware quirk)
+</label>
+<div id="screen-wrap">
+  <canvas id="screen" width="304" height="256" style="width: 608px; height: 512px;"></canvas>
+</div>
+<button id="tap-btn">Double tap (capacitive button)</button>
+<div id="log"></div>
+
+<script>
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+
+const W = 304, H = 256;
+
+// ActiveLook grey levels are 0-15; render as CSS grey. Color-panel commands
+// (rawColor/rawTextColor) use an approximate RG palette swatch instead -
+// good enough to tell shapes/text apart, not a color-accurate reproduction
+// of the real RG-only optic (ActiveLook_API.md's palette skews yellow/orange
+// for most non-primary combinations, per this HUD's own doc comments).
+function greyCss(level) {
+  const v = Math.max(0, Math.min(15, level)) / 15;
+  return `rgb(${Math.round(v*255)},${Math.round(v*255)},${Math.round(v*255)})`;
+}
+
+// ActiveLookColorPalette values used by this app (see activelook_types.dart)
+// - approximate swatches, not the real device's exact RG rendering.
+const PALETTE = {
+  0: '#e0483c',  // red
+  1: '#3ccf5a',  // green
+  2: '#e0c23c',  // yellow
+};
+function paletteCss(value) {
+  return PALETTE[value] ?? '#ccc';
+}
+
+let currentGrey = 15;
+let currentPaletteColor = null;
+
+function log(text) {
+  const line = document.createElement('div');
+  line.textContent = text;
+  logEl.appendChild(line);
+  if (logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function drawColor() {
+  return currentPaletteColor ?? greyCss(currentGrey);
+}
+
+function clear() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+}
+clear();
+
+function point(x, y) {
+  ctx.fillStyle = drawColor();
+  ctx.fillRect(x, y, 1, 1);
+}
+
+function line(x1, y1, x2, y2) {
+  ctx.strokeStyle = drawColor();
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x1 + 0.5, y1 + 0.5);
+  ctx.lineTo(x2 + 0.5, y2 + 0.5);
+  ctx.stroke();
+}
+
+function rect(x1, y1, x2, y2, filled) {
+  ctx.strokeStyle = drawColor();
+  ctx.fillStyle = drawColor();
+  const x = Math.min(x1, x2), y = Math.min(y1, y2);
+  const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+  if (filled) ctx.fillRect(x, y, w, h);
+  else ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+}
+
+function circle(x, y, r, filled) {
+  ctx.strokeStyle = drawColor();
+  ctx.fillStyle = drawColor();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  if (filled) ctx.fill();
+  else ctx.stroke();
+}
+
+function polyline(xyPairs, thickness) {
+  if (xyPairs.length < 4) return;
+  ctx.strokeStyle = drawColor();
+  ctx.lineWidth = thickness || 1;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(xyPairs[0], xyPairs[1]);
+  for (let i = 2; i < xyPairs.length; i += 2) {
+    ctx.lineTo(xyPairs[i], xyPairs[i + 1]);
+  }
+  ctx.stroke();
+  ctx.lineWidth = 1;
+}
+
+// ALooK's real font ids -> pixel sizes (SourceSansPro SemiBold, see
+// race_mode_glasses_hud.dart's _fontId doc comment: fonts are numbered 1-5,
+// not 0-3). Font metrics aren't identical to this system-monospace
+// approximation, so treat this as "roughly how big", not pixel-exact.
+const FONT_PX = { 1: 24, 2: 38, 3: 64, 4: 75, 5: 82 };
+function fontPx(fontSizeId) {
+  return FONT_PX[fontSizeId] ?? 24;
+}
+
+// Clips to the canvas width so an oversized/overflowing string is visibly
+// truncated instead of silently drawing off-canvas - real hardware simply
+// wouldn't show what falls outside its own 304px buffer either.
+function fillTextClipped(str, x, y) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, W, H);
+  ctx.clip();
+  ctx.fillText(str, x, y);
+  ctx.restore();
+}
+
+function text(x, y, fontSize, color, str) {
+  ctx.fillStyle = greyCss(color);
+  ctx.font = `${fontPx(fontSize)}px monospace`;
+  ctx.textBaseline = 'top';
+  fillTextClipped(str, x, y);
+}
+
+function rawText(x, y, fontSize, colorValue, str) {
+  ctx.fillStyle = paletteCss(colorValue);
+  ctx.font = `${fontPx(fontSize)}px monospace`;
+  ctx.textBaseline = 'top';
+  fillTextClipped(str, x, y);
+}
+
+function imgPlaceholder(x, y) {
+  ctx.strokeStyle = '#666';
+  ctx.strokeRect(x + 0.5, y + 0.5, 40, 40);
+  ctx.fillStyle = '#666';
+  ctx.font = '9px monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillText('img', x + 4, y + 4);
+}
+
+// Real icon images (Engyne's own assets/icons/glasses/*.png, served from
+// this tool's own icons/ copy - see server.dart) for layoutDisplay's stat
+// rows, replacing the imgPlaceholder box those rows used before. Loaded
+// once and cached by name; draws are silently skipped until each finishes
+// loading (typically well before the app's first render call arrives).
+const ICON_CACHE = {};
+function loadIcon(name) {
+  if (ICON_CACHE[name]) return ICON_CACHE[name];
+  const img = new Image();
+  img.src = `/icons/${name}.png`;
+  ICON_CACHE[name] = img;
+  return img;
+}
+
+// Row icons/text are anchored at the row's bottom-right corner (per
+// ENGYNE_LAYOUTS/_rowLayout's "distance from right/bottom edge"
+// convention) - (x, y) here is that corner, not a top-left origin, so both
+// draw *up and to the left* of it rather than down/right like every other
+// primitive in this file.
+function rowIcon(name, x, y, size) {
+  const img = loadIcon(name);
+  if (!img.complete || img.naturalWidth === 0) return;
+  ctx.drawImage(img, x - size, y - size, size, size);
+}
+
+function rowText(x, y, fontSize, colorValue, str) {
+  ctx.fillStyle = paletteCss(colorValue);
+  ctx.font = `${fontPx(fontSize)}px monospace`;
+  ctx.textBaseline = 'bottom';
+  ctx.textAlign = 'right';
+  fillTextClipped(str, x, y);
+  ctx.textAlign = 'left';
+}
+
+// This viewer draws whatever raw device-buffer coordinates the app sends -
+// correct as-is for a unit needing the 180deg flip ActiveLookSafeCanvas
+// applies (see race_mode_glasses_hud.dart/activelook_safe_canvas.dart's doc
+// comments: one physical unit was found to render raw (0,0) at the visual
+// bottom-right, not top-left). The checkbox undoes that here, so a layout
+// authored/reasoned about in plain top-left-origin terms previews that way
+// instead - matches hardware that *doesn't* need the flip, or just a more
+// intuitive preview while iterating on layout math.
+const unflipCheckbox = document.getElementById('unflip-checkbox');
+function unflip(x, y) {
+  if (!unflipCheckbox.checked) return [x, y];
+  return [(W - 1) - x, (H - 1) - y];
+}
+
+// layoutDisplay(id, text) only carries an id + string - the real position/
+// font/size lives entirely on-device, saved earlier by layoutSave and never
+// re-sent. This simulator can't know that in general, but Engyne's own
+// stats-screen layouts are fixed and known (see
+// Engyne/lib/services/race_mode/activelook_engyne_config.dart's
+// chronoLayoutId/speedLayoutId/gapLayoutId/positionLayoutId and _rowLayout)
+// - hardcoded here so the stats screen previews too, not just the map
+// screen (which draws raw primitives, not saved layouts). A layout id not
+// in this table still just logs, same as before.
+//
+// Each row is _rowLayout's own 244x50 box; row (x0,y0) is the row's raw
+// device-space top-left after that method's own _flipPoint, and
+// textX/textY (160,41) are the text's distance from the row's own
+// right/bottom edge, per _rowLayout's doc comment on this unit's "distance
+// from right/bottom" convention.
+const ROW_WIDTH = 244, ROW_HEIGHT = 50, ROW_TEXT_X = 160, ROW_TEXT_Y = 41;
+const ROW_IMAGE_X = 170, ROW_IMAGE_Y = 5;
+// Every row is currently saved with the same foregroundColor
+// (ActiveLookColorPalette.green - _rowLayout's own comment: a test value to
+// confirm per-shape color control, not a per-stat distinction) and fontId
+// (2) - neither is carried on the layoutDisplay wire message itself (only
+// id + text), so both are hardcoded here to match what _rowLayout actually
+// saved rather than read off a field that doesn't exist on this command.
+// If ActiveLookEngyneConfig ever gives rows their own distinct colors, this
+// table needs a `color` per row too.
+const ENGYNE_ROW_FONT_ID = 2;
+const ENGYNE_ROW_COLOR = 1; // ActiveLookColorPalette.green, see PALETTE above
+const ENGYNE_LAYOUTS = {
+  1: { x0: 63, y0: 205, icon: 'chrono' },   // chronoLayoutId
+  2: { x0: 63, y0: 145, icon: 'speed' },    // speedLayoutId
+  3: { x0: 63, y0: 85, icon: 'gap' },       // gapLayoutId
+  4: { x0: 63, y0: 25, icon: 'position' },  // positionLayoutId
+};
+const ROW_ICON_SIZE = 40;
+
+function layoutDisplay(id, str) {
+  const row = ENGYNE_LAYOUTS[id];
+  if (!row) {
+    log(`(not rendered - unknown layout id) layoutDisplay {"id":${id},"text":${JSON.stringify(str)}}`);
+    return;
+  }
+  // Row's right/bottom edge in raw device space, then back off by
+  // textX/textY / imageX/imageY - same "distance from right/bottom" rule
+  // _rowLayout's own doc comment says it applies by hand to both. Both
+  // (tx,ty)/(ix,iy) are that corner, not a top-left origin - rowText/
+  // rowIcon draw up-and-left of it, matching this "distance from
+  // right/bottom" convention rather than a plain top-left anchor.
+  const textRawX = (row.x0 + ROW_WIDTH - 1) - ROW_TEXT_X;
+  const textRawY = (row.y0 + ROW_HEIGHT - 1) - ROW_TEXT_Y;
+  const [tx, ty] = unflip(textRawX, textRawY);
+  rowText(tx, ty, ENGYNE_ROW_FONT_ID, ENGYNE_ROW_COLOR, str);
+
+  const imgRawX = (row.x0 + ROW_WIDTH - 1) - ROW_IMAGE_X;
+  const imgRawY = (row.y0 + ROW_HEIGHT - 1) - ROW_IMAGE_Y;
+  const [ix, iy] = unflip(imgRawX, imgRawY);
+  rowIcon(row.icon, ix, iy, ROW_ICON_SIZE);
+}
+
+function handle(msg) {
+  switch (msg.cmd) {
+    case 'clear': clear(); break;
+    case 'color': currentGrey = msg.level; currentPaletteColor = null; break;
+    case 'rawColor': currentPaletteColor = paletteCss(msg.value); break;
+    case 'point': {
+      const [x, y] = unflip(msg.x, msg.y);
+      point(x, y);
+      break;
+    }
+    case 'line': {
+      const [x1, y1] = unflip(msg.x1, msg.y1);
+      const [x2, y2] = unflip(msg.x2, msg.y2);
+      line(x1, y1, x2, y2);
+      break;
+    }
+    case 'rect': {
+      const [x1, y1] = unflip(msg.x1, msg.y1);
+      const [x2, y2] = unflip(msg.x2, msg.y2);
+      rect(x1, y1, x2, y2, false);
+      break;
+    }
+    case 'rectFilled': {
+      const [x1, y1] = unflip(msg.x1, msg.y1);
+      const [x2, y2] = unflip(msg.x2, msg.y2);
+      rect(x1, y1, x2, y2, true);
+      break;
+    }
+    case 'circle': {
+      const [x, y] = unflip(msg.x, msg.y);
+      circle(x, y, msg.radius, false);
+      break;
+    }
+    case 'circleFilled': {
+      const [x, y] = unflip(msg.x, msg.y);
+      circle(x, y, msg.radius, true);
+      break;
+    }
+    case 'polyline': {
+      const pairs = [];
+      for (let i = 0; i < msg.xyPairs.length; i += 2) {
+        const [x, y] = unflip(msg.xyPairs[i], msg.xyPairs[i + 1]);
+        pairs.push(x, y);
+      }
+      polyline(pairs, msg.thickness);
+      break;
+    }
+    case 'text': {
+      // Text has no rotation applied here (rotation id is passed through
+      // untouched) - flipping only the anchor point is an approximation:
+      // real 180deg-flipped hardware would also mirror the glyphs
+      // themselves, which this canvas-text approximation doesn't attempt.
+      const [x, y] = unflip(msg.x, msg.y);
+      text(x, y, msg.fontSize, msg.color, msg.text);
+      break;
+    }
+    case 'rawTextColor': {
+      const [x, y] = unflip(msg.x, msg.y);
+      rawText(x, y, msg.fontSize, msg.colorValue, msg.text);
+      break;
+    }
+    case 'imgDisplay': {
+      const [x, y] = unflip(msg.x, msg.y);
+      imgPlaceholder(x, y);
+      break;
+    }
+    case 'layoutDisplay':
+      layoutDisplay(msg.id, msg.text);
+      break;
+    case 'layoutDisplayExtended':
+    case 'layoutClearAndDisplay':
+    case 'gaugeDisplay':
+    case 'pageDisplay':
+    case 'animDisplay':
+      log(`(not rendered - saved on-device) ${msg.cmd} ${JSON.stringify(msg)}`);
+      return;
+    case 'holdFlush':
+    case 'luma':
+    case 'als':
+    case 'power':
+    case 'grey':
+    case 'led':
+    case 'shift':
+    case 'sensor':
+    case 'gesture':
+    case 'configSet':
+      break; // state/no-op commands, nothing to draw
+    default:
+      log(`(unhandled) ${msg.cmd} ${JSON.stringify(msg)}`);
+      return;
+  }
+  log(JSON.stringify(msg));
+}
+
+let socket = null;
+const tapBtn = document.getElementById('tap-btn');
+tapBtn.addEventListener('click', () => {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ event: 'sensorTap' }));
+  log('-> sensorTap (double tap)');
+});
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/?role=viewer`);
+  socket = ws;
+  ws.onopen = () => {
+    statusEl.textContent = 'connected - waiting for app';
+    statusEl.className = 'connected';
+  };
+  ws.onclose = () => {
+    statusEl.textContent = 'disconnected from simulator server - retrying…';
+    statusEl.className = 'disconnected';
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (event) => {
+    try {
+      handle(JSON.parse(event.data));
+    } catch (e) {
+      log(`bad message: ${event.data}`);
+    }
+  };
+}
+connect();
+</script>
+</body>
+</html>

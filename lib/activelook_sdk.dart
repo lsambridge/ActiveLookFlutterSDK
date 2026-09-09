@@ -1,7 +1,9 @@
 import 'activelook_sdk_platform_interface.dart';
 import 'src/activelook_types.dart';
 
+export 'activelook_sdk_platform_interface.dart' show ActivelookSdkPlatform;
 export 'src/activelook_safe_canvas.dart';
+export 'src/activelook_sdk_fake.dart';
 export 'src/activelook_types.dart';
 
 /// Dart wrapper over ActiveLook's official Android (`android-sdk`) and iOS
