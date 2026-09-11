@@ -47,7 +47,21 @@ class FakeActivelookSdk extends ActivelookSdkPlatform {
   void _send(String cmd, Map<String, Object?> args) {
     final channel = _channel;
     if (channel == null) return;
-    channel.sink.add(jsonEncode({'cmd': cmd, ...args}));
+    try {
+      channel.sink.add(jsonEncode({'cmd': cmd, ...args}));
+    } catch (_) {
+      // Socket already closed/broken (e.g. simulator server restarted or the
+      // viewer's page reload briefly dropped the TCP connection) - treat
+      // like any other disconnect rather than letting the error escape
+      // uncaught, which previously crashed the whole app.
+      _handleDisconnect();
+    }
+  }
+
+  void _handleDisconnect() {
+    if (_channel == null) return;
+    _channel = null;
+    _connectionStateController.add(ActiveLookConnectionState.disconnected);
   }
 
   // --- Scanning & connection ---
@@ -81,24 +95,31 @@ class FakeActivelookSdk extends ActivelookSdkPlatform {
     // class currently expects. See viewer.html's tap button and
     // server.dart's relay (it forwards every viewer message to the app
     // unchanged, same as it does app-to-viewer).
-    _channel!.stream.listen((message) {
-      try {
-        final decoded = jsonDecode(message as String);
-        if (decoded is Map && decoded['event'] == 'sensorTap') {
-          _sensorTapController.add(null);
+    _channel!.stream.listen(
+      (message) {
+        try {
+          final decoded = jsonDecode(message as String);
+          if (decoded is Map && decoded['event'] == 'sensorTap') {
+            _sensorTapController.add(null);
+          }
+        } catch (_) {
+          // Ignore anything that isn't the expected JSON event message.
         }
-      } catch (_) {
-        // Ignore anything that isn't the expected JSON event message.
-      }
-    });
+      },
+      // Without these, a socket error or close (e.g. the simulator server
+      // dropping the connection) became an uncaught stream error/silent
+      // dangling channel - the app would then crash on its next _send()
+      // call instead of surfacing as a normal disconnect.
+      onError: (_) => _handleDisconnect(),
+      onDone: _handleDisconnect,
+    );
     _connectionStateController.add(ActiveLookConnectionState.connected);
   }
 
   @override
   Future<void> disconnect() async {
     await _channel?.sink.close();
-    _channel = null;
-    _connectionStateController.add(ActiveLookConnectionState.disconnected);
+    _handleDisconnect();
   }
 
   @override

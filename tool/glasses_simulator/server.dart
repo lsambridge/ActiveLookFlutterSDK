@@ -48,8 +48,12 @@ Future<void> main(List<String> args) async {
           (message) {
             // Only the app has a real socket to forward to - if it isn't
             // connected yet, a tap here has nothing to reach, so just drop
-            // it rather than queueing/erroring.
-            app?.add(message);
+            // it rather than queueing/erroring. Also drop (rather than
+            // crash the relay) if the app's socket looks alive here but has
+            // actually gone stale.
+            try {
+              app?.add(message);
+            } catch (_) {}
           },
           onDone: () {
             viewers.remove(socket);
@@ -61,8 +65,18 @@ Future<void> main(List<String> args) async {
         app = socket;
         socket.listen(
           (message) {
-            for (final viewer in viewers) {
-              viewer.add(message);
+            // A viewer whose page was reloaded/closed can still linger here
+            // briefly before its onDone fires and removes it - writing to
+            // that dead socket throws (WebSocketChannelException/
+            // StateError), which previously propagated out of this
+            // listener uncaught and could take the whole relay process
+            // down mid-message, breaking the app's socket along with it.
+            for (final viewer in viewers.toList()) {
+              try {
+                viewer.add(message);
+              } catch (_) {
+                viewers.remove(viewer);
+              }
             }
           },
           onDone: () {
