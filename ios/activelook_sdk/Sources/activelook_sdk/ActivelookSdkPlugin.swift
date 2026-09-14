@@ -133,8 +133,23 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                 guard let self = self else { return }
                 self.onMain {
                     self.connectedGlasses = glasses
-                    glasses.onDisconnect {
-                        self.onMain {
+                    // Identity-guarded against `connectedGlasses` (matches the
+                    // Android build's fix, confirmed by real-device repro there
+                    // 2026-09-16): the plain "disconnect" case below doesn't wait
+                    // for this callback before resolving, so a
+                    // forget-then-immediately-reconnect sequence can start a NEW
+                    // connect() while THIS (old) connection's disconnect is still
+                    // in flight. Without this guard, the old connection's
+                    // disconnect callback landing after the new one has already
+                    // set connectedGlasses would null it back out and push a
+                    // stray "disconnected" onto the stream, permanently
+                    // overriding the new connection's "connected" state - the
+                    // only fix being a full app restart. Comparing identity here
+                    // means a stale callback from an old, already-superseded
+                    // Glasses instance is simply ignored.
+                    glasses.onDisconnect { [weak self] in
+                        self?.onMain {
+                            guard let self = self, self.connectedGlasses === glasses else { return }
                             self.connectedGlasses = nil
                             self.connectionStateSink?("disconnected")
                         }
@@ -197,7 +212,16 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
             }
 
         case "disconnect":
+            // Cleared synchronously, not left solely to the async onDisconnect
+            // callback registered in "connect" above - matches the Android
+            // build's fix (see that file's "disconnect" case for the full
+            // rationale): this handler previously resolved immediately after
+            // dispatching .disconnect() without waiting for (or forcing) that
+            // callback, so an immediate forget-then-reconnect sequence could
+            // start a new "connect" call while connectedGlasses still pointed
+            // at the instance being torn down.
             connectedGlasses?.disconnect()
+            connectedGlasses = nil
             result(nil)
 
         case "getDeviceInformation":

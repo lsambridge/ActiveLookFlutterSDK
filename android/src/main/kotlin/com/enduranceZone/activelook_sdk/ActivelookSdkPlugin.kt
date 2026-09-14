@@ -189,10 +189,27 @@ class ActivelookSdkPlugin :
                         // DiscoveredGlasses.connect/Sdk.connect Javadoc parameter order
                         // (onConnected, onConnectionFail, onDisconnected) - confirmed by
                         // reading both directly. Kept separate from onConnectionFail below.
+                        //
+                        // Identity-guarded against `connectedGlasses` (confirmed by real-
+                        // device repro, 2026-09-16): the plain "disconnect" handler below
+                        // doesn't wait for this callback before resolving, so a
+                        // forget-then-immediately-reconnect sequence can start a NEW
+                        // connect() while THIS (old) connection's disconnect is still in
+                        // flight. Without this guard, the old connection's disconnect
+                        // callback landing after the new one has already set
+                        // connectedGlasses would null it back out and push a stray
+                        // "disconnected" onto the stream, permanently overriding the new
+                        // connection's "connected" state - the only fix being a full app
+                        // restart, since nothing else ever re-established a clean
+                        // connectedGlasses/stream state. Comparing identity here means a
+                        // stale callback from an old, already-superseded Glasses instance
+                        // is simply ignored.
                         glasses.setOnDisconnected {
                             onMain {
-                                connectedGlasses = null
-                                connectionStateSink?.success("disconnected")
+                                if (connectedGlasses === glasses) {
+                                    connectedGlasses = null
+                                    connectionStateSink?.success("disconnected")
+                                }
                             }
                         }
                         connectionStateSink?.success("connected")
@@ -240,7 +257,18 @@ class ActivelookSdkPlugin :
                 }
             }
             "disconnect" -> {
+                // Cleared synchronously, not left solely to the async
+                // setOnDisconnected callback registered in "connect" above - this
+                // handler previously resolved immediately after dispatching
+                // .disconnect() without waiting for (or forcing) that callback,
+                // so an immediate forget-then-reconnect sequence could start a new
+                // "connect" call while connectedGlasses still pointed at the
+                // instance being torn down. Nulling it here means a subsequent
+                // "connect" never races against - or gets its result overwritten
+                // by - this old instance's own (now identity-guarded, see
+                // "connect" above) disconnect callback landing late.
                 connectedGlasses?.disconnect()
+                connectedGlasses = null
                 result.success(null)
             }
             "getDeviceInformation" -> {
