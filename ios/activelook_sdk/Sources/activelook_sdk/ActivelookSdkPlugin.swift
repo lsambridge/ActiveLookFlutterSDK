@@ -143,6 +143,22 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(code: "NOT_FOUND", message: "No device id given to connect.", details: nil))
                 return
             }
+            // Already connected to this exact device - resolve immediately
+            // instead of dispatching a second, concurrent native connect.
+            // Matches the Android build's fix (see that file's "connect" case
+            // for the full real-hardware rationale): the Dart side retries
+            // connect() on a timer while glasses are off, each attempt with its
+            // own Dart-side timeout, and a late-completing native connect from
+            // an earlier attempt otherwise leaves this new attempt racing an
+            // already-(re)connecting Glasses instance that never resolves
+            // either way - it just times out, disconnects the now-actually-
+            // connected glasses, and repeats forever with the Dart side's
+            // `available` flag never landing on true.
+            if connectedGlasses?.identifier.uuidString == id {
+                onMain { self.connectionStateSink?("connected") }
+                result(nil)
+                return
+            }
             // `result` must resolve exactly once, from whichever of onGlassesConnected/
             // onConnectionError fires first - confirmed on real hardware (2026-09-02,
             // Android build of this same handler) that the previous version called

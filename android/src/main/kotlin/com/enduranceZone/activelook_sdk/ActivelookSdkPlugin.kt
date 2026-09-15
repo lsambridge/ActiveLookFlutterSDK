@@ -188,6 +188,29 @@ class ActivelookSdkPlugin :
                     result.error("NOT_FOUND", "No device id given to connect.", null)
                     return
                 }
+                // Already connected to this exact device - resolve immediately
+                // instead of dispatching a second, concurrent native connect.
+                // Found on real hardware (2026-09-16): the Dart side retries
+                // connect() on a timer while glasses are off (see
+                // RaceModeSetupScreen._connectGlasses), each attempt with its own
+                // 8s Dart-side timeout (RaceModeGlassesHud._connectTimeout). If the
+                // glasses power on mid-attempt, the underlying android-sdk connect
+                // can complete *after* that Dart timeout has already fired and
+                // called disconnect() - but the very next retry's connect() call
+                // then races a glasses instance that's already mid-(re)connecting
+                // natively, which the SDK doesn't resolve either way, so it just
+                // hangs for another 8s, times out, disconnects the now-actually-
+                // connected glasses, and repeats forever - connected and
+                // disconnected in the same breath, with the Dart side's
+                // `available` flag never landing on true. Comparing the address
+                // (DiscoveredGlasses/Glasses don't expose deviceInformation
+                // without a live connection, but the address is stable) avoids
+                // redispatching in that case.
+                if (connectedGlasses?.address == id) {
+                    onMain { connectionStateSink?.success("connected") }
+                    result.success(null)
+                    return
+                }
                 // `result` must resolve exactly once, from whichever of onConnected/
                 // onConnectionFail fires first - confirmed on real hardware (2026-09-02)
                 // that the previous version called result.success(null) unconditionally,
