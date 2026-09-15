@@ -121,6 +121,38 @@ class ActivelookSdkPlugin :
         })
     }
 
+    // `EventChannel.onListen` only fires the first time the Dart side attaches its
+    // listener for that channel - Dart's own wrappers (`ActivelookSdkPlatform
+    // .battery/flowControlNotifications/sensorTapNotifications`) cache their stream for
+    // the app's lifetime, so `onListen` never fires again after the very first
+    // subscription. Without this, a reconnect (a fresh `Glasses` instance - see
+    // `onConnected` below) left every one of these subscribed to the *previous*,
+    // now-dead `Glasses` object, so notifications silently stopped after any BLE
+    // drop-and-recover: confirmed as the cause of a real-hardware report (2026-09-16)
+    // that the glasses' double-tap "next screen" gesture stopped responding mid-race
+    // with no error anywhere - a mid-ride BLE blip reconnects far more often outdoors
+    // than in any desk/simulator test. Called from `onConnected` on every successful
+    // connect (first one included, since a sink may already be attached from a
+    // previous connect() on the same session), re-arming against whichever `Glasses`
+    // instance is current.
+    private fun resubscribeNotifications(glasses: Glasses) {
+        batterySink?.let { sink ->
+            glasses.subscribeToBatteryLevelNotifications { level ->
+                onMain { sink.success(level) }
+            }
+        }
+        flowControlSink?.let { sink ->
+            glasses.subscribeToFlowControlNotifications { status ->
+                onMain { sink.success(flowControlStatusName(status)) }
+            }
+        }
+        sensorTapSink?.let { sink ->
+            glasses.subscribeToSensorInterfaceNotifications {
+                onMain { sink.success(null) }
+            }
+        }
+    }
+
     private fun ensureSdk(): Sdk {
         return sdk ?: Sdk.init(
             appContext,
@@ -213,6 +245,7 @@ class ActivelookSdkPlugin :
                             }
                         }
                         connectionStateSink?.success("connected")
+                        resubscribeNotifications(glasses)
                         deliverSuccess()
                     }
                 }

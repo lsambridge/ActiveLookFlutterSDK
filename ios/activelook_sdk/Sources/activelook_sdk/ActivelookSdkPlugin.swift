@@ -24,6 +24,46 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
         if Thread.isMainThread { body() } else { DispatchQueue.main.async(execute: body) }
     }
 
+    /// `FlutterEventChannel.onListen` (in `BatteryStreamHandler`/`FlowControlStreamHandler`/
+    /// `SensorTapStreamHandler` below) only fires the first time the Dart side attaches its
+    /// listener for that channel - Dart's own wrappers cache their stream for the app's
+    /// lifetime, so `onListen` never fires again after the very first subscription. Without
+    /// this, a reconnect (a fresh `Glasses` instance - see `onConnected` in `handle`) left
+    /// every one of these subscribed to the *previous*, now-dead `Glasses` object, so
+    /// notifications silently stopped after any BLE drop-and-recover (matches the Android
+    /// build's fix, confirmed there by a real-hardware report, 2026-09-16, that the glasses'
+    /// double-tap "next screen" gesture stopped responding mid-race with no error anywhere -
+    /// a mid-ride BLE blip reconnects far more often outdoors than in any desk/simulator
+    /// test). Called from `onConnected` on every successful connect (first one included,
+    /// since a sink may already be attached from a previous connect() on the same session),
+    /// re-arming against whichever `Glasses` instance is current.
+    private func resubscribeNotifications(_ glasses: Glasses) {
+        if let sink = batterySink {
+            glasses.subscribeToBatteryLevelNotifications { [weak self] level in
+                self?.onMain { sink(level) }
+            }
+        }
+        if let sink = flowControlSink {
+            glasses.subscribeToFlowControlNotifications { [weak self] state in
+                let name: String
+                switch state {
+                case .on: name = "bufferOk"
+                case .off: name = "bufferFull"
+                case .error: name = "cmdError"
+                case .overflow: name = "overflow"
+                case .missingConfiguration: name = "missingConfigId"
+                case .unexpectedDataType: name = "reserved"
+                }
+                self?.onMain { sink(name) }
+            }
+        }
+        if let sink = sensorTapSink {
+            glasses.subscribeToSensorInterfaceNotifications { [weak self] in
+                self?.onMain { sink(nil) }
+            }
+        }
+    }
+
     /// Builds the `SerializedGlasses` (`= Data`) blob `ActiveLookSDK.connect(using:)` needs for a
     /// scan-free reconnect from a saved id alone - confirmed against the SDK's own
     /// `UnserializedGlasses`/`SerializedGlasses.swift` (v4.5.5): a JSON object of exactly
@@ -155,6 +195,7 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
                         }
                     }
                     self.connectionStateSink?("connected")
+                    self.resubscribeNotifications(glasses)
                     deliverSuccess()
                 }
             }
