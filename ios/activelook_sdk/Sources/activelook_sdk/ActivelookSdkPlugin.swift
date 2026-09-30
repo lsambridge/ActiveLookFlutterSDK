@@ -78,7 +78,21 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
         try? JSONSerialization.data(withJSONObject: ["id": id, "name": "", "manId": ""])
     }
 
+    /// Created once and reused. `ActiveLookSDK.shared(...)` throws "Parameters cannot be
+    /// changed after initialization" if called again with a fresh set of callback closures
+    /// once the singleton exists - seen on real iPhones (Crashlytics, 2026-09-30) when a
+    /// workout was stopped and started again, where the reconnect's `connect(using:)` path
+    /// re-entered this function and the connect failed, leaving the app on "connecting".
+    private var cachedSdk: ActiveLookSDK?
+
     private func sdk() throws -> ActiveLookSDK {
+        if let cachedSdk = cachedSdk { return cachedSdk }
+        let created = try createSdk()
+        cachedSdk = created
+        return created
+    }
+
+    private func createSdk() throws -> ActiveLookSDK {
         try ActiveLookSDK.shared(
             onUpdateStartCallback: { _ in },
             onUpdateAvailableCallback: { _, proceed in proceed() },
