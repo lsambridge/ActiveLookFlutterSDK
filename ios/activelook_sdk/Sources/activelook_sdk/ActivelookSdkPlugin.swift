@@ -83,13 +83,20 @@ public class ActivelookSdkPlugin: NSObject, FlutterPlugin {
     /// once the singleton exists - seen on real iPhones (Crashlytics, 2026-09-30) when a
     /// workout was stopped and started again, where the reconnect's `connect(using:)` path
     /// re-entered this function and the connect failed, leaving the app on "connecting".
+    /// Per the vendor's docs, `shared()` with no arguments returns the existing singleton and
+    /// throws `sdkInitMissingParameters` if it doesn't exist yet - only then is it initialised.
     private var cachedSdk: ActiveLookSDK?
 
     private func sdk() throws -> ActiveLookSDK {
         if let cachedSdk = cachedSdk { return cachedSdk }
-        let created = try createSdk()
-        cachedSdk = created
-        return created
+        let resolved: ActiveLookSDK
+        if let existing = try? ActiveLookSDK.shared() {
+            resolved = existing
+        } else {
+            resolved = try createSdk()
+        }
+        cachedSdk = resolved
+        return resolved
     }
 
     private func createSdk() throws -> ActiveLookSDK {
