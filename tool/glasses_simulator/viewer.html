@@ -41,8 +41,8 @@
   canvas { display: block; image-rendering: pixelated; }
   #log {
     margin-top: 16px;
-    width: 608px;
-    max-height: 160px;
+    width: 1024px;
+    max-height: 360px;
     overflow-y: auto;
     background: #1a1a1a;
     border: 1px solid #333;
@@ -108,13 +108,26 @@ function greyCss(level) {
   return `rgb(${Math.round(v*255)},${Math.round(v*255)},${Math.round(v*255)})`;
 }
 
-// ActiveLookColorPalette values used by this app (see activelook_types.dart)
-// - approximate swatches, not the real device's exact RG rendering.
-const PALETTE = {
-  0: '#e0483c',  // red
-  1: '#3ccf5a',  // green
-  2: '#e0c23c',  // yellow
-};
+// The real ActiveLookColorPalette bytes (lib/src/activelook_types.dart): row = red level 0-8, column = green level
+// 0-8. rawColor/rawTextColor send one of these bytes (green is 0xC3, yellow 0xFF, red 0x3C). Each byte is rendered
+// as an approximate swatch for an RG-only optic - good enough to tell colours apart, not colour-accurate. (This used
+// to be keyed 0/1/2, which never matched the real bytes, so every colour fell back to grey.)
+const PALETTE_TABLE = [
+  [0x00, 0x01, 0x02, 0x41, 0x81, 0x82, 0x43, 0x83, 0xC3],
+  [0x04, 0x05, 0x06, 0x45, 0x85, 0x86, 0x47, 0x87, 0xC7],
+  [0x20, 0x21, 0x22, 0x61, 0xA1, 0xA2, 0x63, 0xA3, 0xE3],
+  [0x14, 0x15, 0x16, 0x55, 0x95, 0x96, 0x57, 0x97, 0xD7],
+  [0x18, 0x19, 0x1A, 0x59, 0x99, 0x9A, 0x5B, 0x9B, 0xDB],
+  [0x28, 0x29, 0x2A, 0x69, 0xA9, 0xAA, 0x6B, 0xAB, 0xEB],
+  [0x1C, 0x1D, 0x1E, 0x5D, 0x9D, 0x9E, 0x5F, 0x9F, 0xDF],
+  [0x38, 0x39, 0x3A, 0x79, 0xB9, 0xBA, 0x7B, 0xBB, 0xFB],
+  [0x3C, 0x3D, 0x3E, 0x7D, 0xBD, 0xBE, 0x7F, 0xBF, 0xFF],
+];
+const PALETTE = {};
+PALETTE_TABLE.forEach((row, redLevel) => row.forEach((byte, greenLevel) => {
+  const r = redLevel / 8, g = greenLevel / 8;
+  PALETTE[byte] = `rgb(${Math.round(224 * r)},${Math.round(207 * g)},${Math.round(60 * g)})`;
+}));
 function paletteCss(value) {
   return PALETTE[value] ?? '#ccc';
 }
